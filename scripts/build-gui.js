@@ -17,13 +17,26 @@ const externals = [
   "solid-js",
   "solid-js/web",
   "solid-js/store",
-  "solid-js/h",
   "@opencode/client/solid",
   "@opencode/plugin/gui/file",
   "@opencode/plugin/gui/review",
   "@opencode/plugin/gui/browser",
   "electron",
 ]
+
+const externalSet = new Set(externals)
+
+const exactExternalsPlugin = {
+  name: "exact-externals",
+  setup(build) {
+    build.onResolve({ filter: /.*/ }, (args) => {
+      if (externalSet.has(args.path)) {
+        return { path: args.path, external: true }
+      }
+      return null
+    })
+  },
+}
 
 export const guiBuildOptions = {
   entryPoints: [path.join(root, "src/gui.ts")],
@@ -32,7 +45,7 @@ export const guiBuildOptions = {
   platform: "browser",
   format: "cjs",
   target: "es2022",
-  external: externals,
+  plugins: [exactExternalsPlugin],
   sourcemap: true,
   logLevel: "info",
 }
