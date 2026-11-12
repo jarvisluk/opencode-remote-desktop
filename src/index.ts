@@ -138,6 +138,30 @@ export default Plugin.define({
         }
         return injectRemoteInput(input, callCtx.signal)
       },
+      listWindows: async (rawInput, callCtx) => {
+        const input = (rawInput ?? {}) as { app?: string }
+        const windows = await listWindows(input.app, callCtx.signal)
+        return {
+          windows: windows.map((w) => ({
+            id: w.id,
+            appName: w.appName,
+            title: w.title,
+            isFocused: w.isFocused,
+            visible: w.visible,
+          })),
+        }
+      },
+      focusWindow: async (rawInput, callCtx) => {
+        const input = (rawInput ?? {}) as { windowId?: string; app?: string }
+        if (!input.windowId && !input.app) {
+          return { ok: false, detail: "Missing windowId or app" }
+        }
+        const args = ["focus-window"]
+        if (input.windowId) args.push("--window-id", input.windowId)
+        if (input.app) args.push("--app", input.app)
+        const res = await runAgentDesktop(args, { headed: true, timeoutMs: 8_000, signal: callCtx.signal })
+        return { ok: res.ok, detail: res.ok ? "Window focused" : res.raw }
+      },
       listTakeovers: async () => ({
         items: takeovers.list(),
       }),

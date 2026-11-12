@@ -93,6 +93,56 @@ export const DotBotRpc = Rpc.define({
         additionalProperties: false,
       },
     },
+    listWindows: {
+      input: {
+        type: "object",
+        properties: {
+          app: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          windows: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                appName: { type: "string" },
+                title: { type: "string" },
+                isFocused: { type: "boolean" },
+                visible: { type: "boolean" },
+              },
+              required: ["id", "appName", "title", "isFocused", "visible"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["windows"],
+        additionalProperties: false,
+      },
+    },
+    focusWindow: {
+      input: {
+        type: "object",
+        properties: {
+          windowId: { type: "string" },
+          app: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          ok: { type: "boolean" },
+          detail: { type: "string" },
+        },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
     listTakeovers: {
       input: { type: "object", additionalProperties: false },
       output: {

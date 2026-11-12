@@ -61,18 +61,28 @@
 
 ## 🛠 工具与命令列表 (Tools & Commands)
 
+### 原生侧边栏标签页 (Native Side Panel)
+- **实时屏幕侧边栏 (Live Screen Tab)**:
+  - 侧边栏支持直接打开 Live Screen Tab（`region: "side"`）。
+  - 支持快捷键 `Cmd+Shift+S` 或输入 `/screen` 或点击侧边栏 `+` 菜单快速呼出。
+  - 直接在 OpenCode 内实时观看远端 macOS 桌面（1~4 FPS 动态可调，150ms 超低延迟）。
+  - **直接远程操作**：支持鼠标点击（Click）、双击（Double Click）、右键菜单（Right Click）、滚轮滑动（Scroll）。
+  - **文本与键盘输入**：支持剪贴板无损文本键入及各种常用功能键（Return、Esc、Tab、Cmd+C、Cmd+V、Cmd+W、方向键等）。
+  - **窗口聚焦切换**：下拉直接切换并置顶宿主机上的任何前台应用窗口。
+  - **无缝接管恢复**：AI 请求接管时侧边栏顶部直接亮起接管横幅，用户操作完成后点击“完成并恢复 AI”即可自动唤醒 AI Agent 继续执行。
+
 ### AI 工具 (Tools)
 - `computer_status`: 获取宿主机操作系统、屏幕分辨率、无障碍权限以及接管控制台运行状态。
 - `computer_screenshot`: 高性能捕获当前屏幕或指定窗口，返回压缩 JPEG 及逻辑显示坐标。
 - `computer_desktop`: 运行原生桌面动作（`snapshot` 读取无障碍树、`click`、`type`、`press`、`scroll`）。
 - `computer_browser`: 操作宿主机 Edge/Chrome 浏览器（`open`、`snapshot`、`click`、`type`、`eval`）。
-- `computer_request_takeover`: 请求人类接管屏幕并挂起当前会话，返回接管链接。
+- `computer_request_takeover`: 请求人类接管屏幕并挂起当前会话，返回接管链接并在侧边栏高亮提示。
 - `computer_routine`: 管理全天候例行任务（`list`、`add`、`remove`）。
 
 ### 斜杠命令 (Slash Commands)
+- `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。
 - `/dotbot`: 查看 DotBot 状态与 Web 控制台入口。
-- `/screen`: 快速捕获屏幕并输出到当前对话。
-- `/takeover`: 手动挂起会话并获取接管链接。
+- `/takeover`: 手动挂起会话并请求人类接管。
 - `/routine`: 列出或管理例行任务。
 
 ---
