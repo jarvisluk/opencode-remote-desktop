@@ -275,170 +275,388 @@ const CONSOLE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>OpenCode DotBot · Mac 远程控制台</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#000000" />
+  <title>Mac 远程控制 · OpenCode</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0b0d10;
-      --panel: #151921;
-      --border: #262d3b;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --accent: #3b82f6;
-      --green: #10b981;
-      --amber: #f59e0b;
+      --glass: rgba(22, 22, 22, 0.78);
+      --glass-border: rgba(255, 255, 255, 0.12);
+      --surface-hover: rgba(255, 255, 255, 0.08);
+      --surface-active: rgba(255, 255, 255, 0.14);
+      --text-strong: rgba(255, 255, 255, 0.94);
+      --text-base: rgba(255, 255, 255, 0.64);
+      --text-weak: rgba(255, 255, 255, 0.42);
+      --interactive: #9dbefe;
+      --success: #7add71;
+      --critical: #fc533a;
+      --warning: #f5c84b;
+      --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --radius: 10px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+      --safe-top: env(safe-area-inset-top);
+      --safe-bottom: env(safe-area-inset-bottom);
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #000; }
     body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-      display: flex;
-      flex-direction: column;
-      min-height: 100dvh;
-    }
-    header {
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      padding: 8px 12px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    select, input, button {
-      background: #1e2430;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 6px 10px;
+      color: var(--text-strong);
+      font-family: var(--font-sans);
       font-size: 13px;
+      line-height: 20px;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
     }
-    button { cursor: pointer; touch-action: manipulation; }
-    button:active { opacity: 0.8; }
-    button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.resume { background: var(--green); border-color: var(--green); color: #052e16; font-weight: 600; }
-    #takeoverBanner {
-      display: none;
-      background: rgba(245, 158, 11, 0.14);
-      border-bottom: 1px solid var(--amber);
-      padding: 10px 12px;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    main {
-      flex: 1;
+    button, select, input { font: inherit; color: inherit; }
+    button { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 2px solid var(--interactive); outline-offset: 1px; }
+    [hidden] { display: none !important; }
+
+    /* 全屏画面 */
+    #stage {
+      position: fixed;
+      inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      overflow: auto;
-      padding: 6px;
-      position: relative;
     }
-    #screenWrap {
-      position: relative;
-      display: inline-block;
-      max-width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-      background: #000;
-    }
+    #screenWrap { position: relative; line-height: 0; }
     #screenImg {
       display: block;
-      max-width: 100%;
-      max-height: calc(100dvh - 165px);
+      max-width: 100vw;
+      max-height: 100dvh;
       width: auto;
       height: auto;
       user-select: none;
+      -webkit-user-select: none;
       -webkit-user-drag: none;
+      -webkit-touch-callout: none;
       cursor: crosshair;
+    }
+    #screenImg:not([src]) { width: 100vw; height: 100dvh; }
+    #screenWrap[data-mode="view"] #screenImg { cursor: default; }
+    .placeholder {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--text-weak);
+      line-height: 20px;
+      pointer-events: none;
     }
     .dot {
       position: absolute;
-      width: 16px;
-      height: 16px;
-      margin-left: -8px;
-      margin-top: -8px;
-      border: 2px solid var(--accent);
+      width: 22px;
+      height: 22px;
+      margin: -11px 0 0 -11px;
+      border: 2px solid var(--interactive);
       border-radius: 50%;
       pointer-events: none;
       animation: pulse 0.45s ease-out forwards;
     }
     @keyframes pulse {
       from { transform: scale(0.5); opacity: 1; }
-      to { transform: scale(2); opacity: 0; }
+      to { transform: scale(1.8); opacity: 0; }
     }
-    footer {
-      background: var(--panel);
-      border-top: 1px solid var(--border);
-      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+
+    /* 浮层通用 */
+    .glass {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(16px) saturate(1.4);
+      backdrop-filter: blur(16px) saturate(1.4);
+    }
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-grid;
+      place-items: center;
+      flex-shrink: 0;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-base);
+    }
+    .icon-btn:hover { background: var(--surface-hover); color: var(--text-strong); }
+    .icon-btn[aria-pressed="true"] { background: var(--surface-active); color: var(--text-strong); }
+    .icon-btn svg { width: 18px; height: 18px; }
+
+    /* 悬浮把手：默认唯一可见的控件，闲置时变淡 */
+    #handle {
+      position: fixed;
+      top: calc(10px + var(--safe-top));
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 30;
       display: flex;
-      flex-direction: column;
-      gap: 8px;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border-radius: 999px;
+      transition: opacity 0.3s, transform 0.25s;
     }
-    #textForm { display: flex; gap: 6px; width: 100%; }
-    #textInput { flex: 1; min-width: 120px; }
-    #statusText { font-size: 12px; color: var(--muted); }
+    #handle .icon-btn { border-radius: 999px; }
+    #handle[data-idle="true"]:not(:hover):not(:focus-within) { opacity: 0.28; }
+    body[data-top="open"] #handle { transform: translateX(-50%) translateY(-80px); opacity: 0; pointer-events: none; }
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 46vw;
+      padding: 0 10px 0 8px;
+      color: var(--text-base);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status-pill span:last-child { overflow: hidden; text-overflow: ellipsis; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-weak); flex-shrink: 0; }
+    .status-dot[data-state="online"] { background: var(--success); }
+    .status-dot[data-state="error"] { background: var(--critical); }
+    .status-dot[data-state="busy"] { background: var(--interactive); }
+
+    /* 顶部工具栏：按需唤出 */
+    #topbar {
+      position: fixed;
+      top: calc(8px + var(--safe-top));
+      left: 50%;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100vw - 16px);
+      padding: 4px;
+      border-radius: 12px;
+      transform: translate(-50%, calc(-100% - 24px));
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.22s ease, opacity 0.22s ease;
+    }
+    body[data-top="open"] #topbar { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+    .segmented {
+      display: inline-flex;
+      padding: 2px;
+      gap: 2px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .segmented button {
+      border: 0;
+      background: transparent;
+      color: var(--text-base);
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .segmented button:hover { color: var(--text-strong); }
+    .segmented button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.16); color: var(--text-strong); }
+    .select {
+      height: 32px;
+      max-width: 200px;
+      min-width: 0;
+      padding: 0 8px;
+      border-radius: 8px;
+      border: 1px solid var(--glass-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-strong);
+    }
+    .select option { background: #1c1c1c; }
+    .vsep { width: 1px; height: 20px; background: var(--glass-border); flex-shrink: 0; }
+
+    /* 底部输入坞：按需唤出 */
+    #dock {
+      position: fixed;
+      left: 50%;
+      bottom: calc(10px + var(--safe-bottom));
+      z-index: 40;
+      width: min(760px, calc(100vw - 16px));
+      border-radius: 14px;
+      transform: translate(-50%, calc(100% + 24px));
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.22s ease, opacity 0.22s ease;
+    }
+    body[data-dock="open"] #dock { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+    #textForm { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; }
+    #textInput {
+      flex: 1;
+      min-width: 0;
+      height: 32px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      font-size: 15px;
+    }
+    #textInput::placeholder { color: var(--text-weak); }
+    .send-btn {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      border: 0;
+      border-radius: 8px;
+      background: var(--text-strong);
+      color: #111;
+    }
+    .send-btn:disabled { opacity: 0.25; cursor: default; }
+    .send-btn svg { width: 16px; height: 16px; }
+    .keys {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 8px;
+      border-top: 1px solid var(--glass-border);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .keys::-webkit-scrollbar { display: none; }
+    .keys .vsep { height: 16px; margin: 0 2px; }
+    .key {
+      height: 28px;
+      min-width: 28px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-base);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .key:hover { background: var(--surface-hover); color: var(--text-strong); }
+    .key:active { background: var(--surface-active); }
+
+    /* 接管提示：AI 等待时始终显示 */
+    #takeoverBanner {
+      position: fixed;
+      left: 50%;
+      top: calc(58px + var(--safe-top));
+      z-index: 35;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100vw - 16px);
+      padding: 6px 6px 6px 12px;
+      border-radius: 12px;
+      border-color: rgba(245, 200, 75, 0.45);
+      transform: translateX(-50%);
+    }
+    #takeoverBanner[data-open="true"] { display: flex; }
+    body[data-top="open"] #takeoverBanner { top: calc(62px + var(--safe-top)); }
+    #takeoverBanner p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #takeoverBanner .warn { color: var(--warning); flex-shrink: 0; }
+    .btn-primary {
+      height: 30px;
+      padding: 0 12px;
+      flex-shrink: 0;
+      border: 0;
+      border-radius: 8px;
+      background: var(--text-strong);
+      color: #111;
+      font-weight: 560;
+      white-space: nowrap;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+
+    @media (max-width: 720px) {
+      #topbar { flex-wrap: wrap; justify-content: center; width: calc(100vw - 16px); }
+      .segmented { width: 100%; }
+      .segmented button { flex: 1; }
+      .select { flex: 1; max-width: none; }
+      #topbar > .vsep { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dot { animation: none; opacity: 0.6; }
+      #handle, #topbar, #dock { transition: none; }
+    }
   </style>
 </head>
-<body>
-  <div id="takeoverBanner">
-    <div id="takeoverReason" style="font-size:13px;">AI 正在等待人工接管验证…</div>
-    <button class="resume" id="resumeBtn">已完成操作，交还 AI 继续</button>
+<body data-top="closed" data-dock="closed">
+  <div id="stage">
+    <div id="screenWrap" data-mode="click">
+      <img id="screenImg" alt="Mac 实时画面" />
+      <div class="placeholder" id="placeholder">正在连接 Mac…</div>
+    </div>
   </div>
 
-  <header>
-    <div class="row">
-      <strong style="font-size:13px;">Mac 画面</strong>
-      <select id="windowSelect"><option value="">全屏主显示器</option></select>
-      <select id="fpsSelect">
-        <option value="900">流畅 (1.1 FPS)</option>
-        <option value="450">高速 (2.2 FPS)</option>
-        <option value="2000">省流 (0.5 FPS)</option>
-        <option value="0">手动刷新</option>
-      </select>
-      <button id="refreshBtn">刷新</button>
-    </div>
-    <div class="row" id="modeBar">
-      <button data-mode="click" class="active">左键</button>
-      <button data-mode="double_click">双击</button>
-      <button data-mode="right_click">右键</button>
-      <button data-mode="view">仅浏览(防误触)</button>
+  <div id="handle" class="glass" data-idle="false">
+    <div class="status-pill" title="连接状态">
+      <span class="status-dot" id="statusDot"></span>
       <span id="statusText">连接中…</span>
     </div>
+    <button class="icon-btn" id="dockToggle" type="button" title="键盘与输入 (Ctrl+K)" aria-label="键盘与输入" aria-pressed="false">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8h1M9.5 8h1M13.5 8h1M6.5 12h7"/></svg>
+    </button>
+    <button class="icon-btn" id="topToggle" type="button" title="工具栏 (Ctrl+.)" aria-label="工具栏" aria-pressed="false">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 10h12M4 14h12"/></svg>
+    </button>
+  </div>
+
+  <header id="topbar" class="glass">
+    <div class="segmented" id="modeBar" role="group" aria-label="点击方式">
+      <button type="button" data-mode="click" aria-pressed="true">单击</button>
+      <button type="button" data-mode="double_click" aria-pressed="false">双击</button>
+      <button type="button" data-mode="right_click" aria-pressed="false">右键</button>
+      <button type="button" data-mode="view" aria-pressed="false">只看</button>
+    </div>
+    <span class="vsep"></span>
+    <select class="select" id="windowSelect" aria-label="画面来源"><option value="">整个屏幕</option></select>
+    <select class="select" id="fpsSelect" aria-label="刷新频率">
+      <option value="900">每秒 1 帧</option>
+      <option value="450">每秒 2 帧</option>
+      <option value="2000">每 2 秒 1 帧</option>
+      <option value="0">手动刷新</option>
+    </select>
+    <button class="icon-btn" id="refreshBtn" type="button" title="刷新画面" aria-label="刷新画面">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3h-3"/></svg>
+    </button>
+    <button class="icon-btn" id="fullscreenBtn" type="button" title="浏览器全屏" aria-label="浏览器全屏">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5v-4h4M16.5 7.5v-4h-4M3.5 12.5v4h4M16.5 12.5v4h-4"/></svg>
+    </button>
+    <button class="icon-btn" id="topClose" type="button" title="收起工具栏" aria-label="收起工具栏">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l5-5 5 5"/></svg>
+    </button>
   </header>
 
-  <main>
-    <div id="screenWrap">
-      <img id="screenImg" alt="macOS live screen" />
-    </div>
-  </main>
+  <div id="takeoverBanner" class="glass" role="alert">
+    <span class="warn">●</span>
+    <p id="takeoverReason">AI 在等你完成一步操作</p>
+    <button class="btn-primary" id="resumeBtn" type="button">完成，交还 AI</button>
+  </div>
 
-  <footer>
+  <div id="dock" class="glass">
     <form id="textForm">
-      <input id="textInput" type="text" autocomplete="off" placeholder="输入验证码 / 密码 / 中文（直接发往 Mac 当前焦点，不经过 AI）" />
-      <button type="submit">发送文字</button>
+      <input id="textInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="输入文字发送到 Mac 当前光标处" />
+      <button class="send-btn" id="sendBtn" type="submit" title="发送" aria-label="发送" disabled>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg>
+      </button>
+      <button class="icon-btn" id="dockClose" type="button" title="收起" aria-label="收起输入">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l5 5 5-5"/></svg>
+      </button>
     </form>
-    <div class="row">
-      <button data-key="return">回车 ↵</button>
-      <button data-key="escape">Esc</button>
-      <button data-key="tab">Tab ⇥</button>
-      <button data-key="delete">退格 ⌫</button>
-      <button data-key="space">空格</button>
-      <button data-key="cmd+v">⌘V</button>
-      <button data-key="cmd+c">⌘C</button>
-      <button data-key="up">↑</button>
-      <button data-key="down">↓</button>
-      <button id="scrollUpBtn">滚轮 ↑</button>
-      <button id="scrollDownBtn">滚轮 ↓</button>
+    <div class="keys" id="keyBar">
+      <button class="key" type="button" data-key="return" title="回车">⏎ Return</button>
+      <button class="key" type="button" data-key="escape" title="Esc">Esc</button>
+      <button class="key" type="button" data-key="tab" title="Tab">⇥ Tab</button>
+      <button class="key" type="button" data-key="delete" title="退格">⌫</button>
+      <button class="key" type="button" data-key="space" title="空格">Space</button>
+      <span class="vsep"></span>
+      <button class="key" type="button" data-key="cmd+c" title="复制">⌘C</button>
+      <button class="key" type="button" data-key="cmd+v" title="粘贴">⌘V</button>
+      <span class="vsep"></span>
+      <button class="key" type="button" data-key="up" title="上箭头">↑</button>
+      <button class="key" type="button" data-key="down" title="下箭头">↓</button>
+      <button class="key" type="button" id="scrollUpBtn" title="向上滚动">滚动 ↑</button>
+      <button class="key" type="button" id="scrollDownBtn" title="向下滚动">滚动 ↓</button>
     </div>
-  </footer>
+  </div>
 
   <script>
     (() => {
@@ -450,27 +668,84 @@ const CONSOLE_HTML = `<!doctype html>
         history.replaceState(null, "", clean);
       }
 
-      const img = document.getElementById("screenImg");
-      const wrap = document.getElementById("screenWrap");
-      const statusText = document.getElementById("statusText");
-      const windowSelect = document.getElementById("windowSelect");
-      const fpsSelect = document.getElementById("fpsSelect");
-      const banner = document.getElementById("takeoverBanner");
-      const reasonEl = document.getElementById("takeoverReason");
+      const $ = (id) => document.getElementById(id);
+      const img = $("screenImg");
+      const wrap = $("screenWrap");
+      const placeholder = $("placeholder");
+      const statusText = $("statusText");
+      const statusDot = $("statusDot");
+      const handle = $("handle");
+      const windowSelect = $("windowSelect");
+      const fpsSelect = $("fpsSelect");
+      const banner = $("takeoverBanner");
+      const reasonEl = $("takeoverReason");
+      const textInput = $("textInput");
+      const sendBtn = $("sendBtn");
+      const topToggle = $("topToggle");
+      const dockToggle = $("dockToggle");
 
       let clickMode = "click";
       let logical = { x: 0, y: 0, w: 1920, h: 1080 };
-      let lastLogicalCenter = { x: 960, y: 540 };
+      let lastPoint = { x: 960, y: 540 };
       let prevBlobUrl = null;
       let inFlight = false;
       let timer = null;
+      let lastWheel = 0;
+      let idleTimer = null;
+
+      function setStatus(text, state) {
+        statusText.textContent = text;
+        if (state) statusDot.dataset.state = state;
+      }
+
+      // 悬浮把手闲置变淡
+      function wake() {
+        handle.dataset.idle = "false";
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => { handle.dataset.idle = "true"; }, 2500);
+      }
+      ["pointermove", "pointerdown", "keydown"].forEach((t) => document.addEventListener(t, wake, { passive: true }));
+      wake();
+
+      // 面板唤出 / 收起
+      function setTop(open) {
+        document.body.dataset.top = open ? "open" : "closed";
+        topToggle.setAttribute("aria-pressed", String(open));
+      }
+      function setDock(open) {
+        document.body.dataset.dock = open ? "open" : "closed";
+        dockToggle.setAttribute("aria-pressed", String(open));
+        if (open) setTimeout(() => textInput.focus(), 60);
+        else textInput.blur();
+      }
+      topToggle.addEventListener("click", () => setTop(document.body.dataset.top !== "open"));
+      dockToggle.addEventListener("click", () => setDock(document.body.dataset.dock !== "open"));
+      $("topClose").addEventListener("click", () => setTop(false));
+      $("dockClose").addEventListener("click", () => setDock(false));
+      document.addEventListener("keydown", (ev) => {
+        const mod = ev.ctrlKey || ev.metaKey;
+        if (mod && ev.key === "k") { ev.preventDefault(); setDock(document.body.dataset.dock !== "open"); }
+        else if (mod && ev.key === ".") { ev.preventDefault(); setTop(document.body.dataset.top !== "open"); }
+        else if (ev.key === "Escape" && (document.body.dataset.top === "open" || document.body.dataset.dock === "open")) {
+          setTop(false);
+          setDock(false);
+        }
+      });
+
+      const fsBtn = $("fullscreenBtn");
+      if (!document.documentElement.requestFullscreen) fsBtn.hidden = true;
+      fsBtn.addEventListener("click", () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen().catch(() => {});
+      });
 
       document.querySelectorAll("#modeBar button[data-mode]").forEach((btn) => {
         btn.addEventListener("click", () => {
           clickMode = btn.dataset.mode;
-          document.querySelectorAll("#modeBar button[data-mode]").forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          img.style.cursor = clickMode === "view" ? "grab" : "crosshair";
+          wrap.dataset.mode = clickMode;
+          document.querySelectorAll("#modeBar button[data-mode]").forEach((b) =>
+            b.setAttribute("aria-pressed", String(b === btn))
+          );
         });
       });
 
@@ -479,7 +754,8 @@ const CONSOLE_HTML = `<!doctype html>
         inFlight = true;
         try {
           const winId = windowSelect.value;
-          const q = winId ? "?windowId=" + encodeURIComponent(winId) : "";
+          const dim = Math.round(Math.max(screen.width, screen.height) * Math.min(devicePixelRatio || 1, 2));
+          const q = "?maxDim=" + dim + (winId ? "&windowId=" + encodeURIComponent(winId) : "");
           const res = await fetch("/api/frame" + q, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           logical = {
@@ -488,15 +764,15 @@ const CONSOLE_HTML = `<!doctype html>
             w: Number(res.headers.get("X-Logical-Width") || 1920),
             h: Number(res.headers.get("X-Logical-Height") || 1080),
           };
-          lastLogicalCenter = { x: logical.x + logical.w / 2, y: logical.y + logical.h / 2 };
           const blob = await res.blob();
           const nextUrl = URL.createObjectURL(blob);
           img.src = nextUrl;
+          placeholder.hidden = true;
           if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
           prevBlobUrl = nextUrl;
-          statusText.textContent = Math.round(logical.w) + "×" + Math.round(logical.h) + " · 在线";
+          if (statusDot.dataset.state !== "busy") setStatus(Math.round(logical.w) + " × " + Math.round(logical.h), "online");
         } catch (e) {
-          statusText.textContent = "等待画面: " + e.message;
+          setStatus("画面获取失败：" + e.message, "error");
         } finally {
           inFlight = false;
         }
@@ -507,23 +783,25 @@ const CONSOLE_HTML = `<!doctype html>
           const res = await fetch("/api/state", { cache: "no-store" });
           if (!res.ok) return;
           const data = await res.json();
-          const currentVal = windowSelect.value;
-          const opts = ['<option value="">全屏主显示器</option>'];
-          for (const w of data.windows || []) {
-            const label = (w.appName + (w.title ? " — " + w.title : "")).slice(0, 46);
-            const sel = w.id === currentVal ? " selected" : "";
-            opts.push('<option value="' + w.id + '"' + sel + ">" + label.replace(/</g, "&lt;") + "</option>");
+          if (document.activeElement !== windowSelect) {
+            const currentVal = windowSelect.value;
+            const opts = ['<option value="">整个屏幕</option>'];
+            for (const w of data.windows || []) {
+              const label = (w.title && w.title !== w.appName ? w.appName + "：" + w.title : w.appName).slice(0, 48);
+              const sel = w.id === currentVal ? " selected" : "";
+              opts.push('<option value="' + w.id + '"' + sel + ">" + label.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</option>");
+            }
+            windowSelect.innerHTML = opts.join("");
           }
-          windowSelect.innerHTML = opts.join("");
 
           const items = data.takeovers || [];
           const matched = targetSession ? items.find((t) => t.sessionID === targetSession) || items[0] : items[0];
           if (matched) {
-            banner.style.display = "flex";
-            reasonEl.textContent = "需要人工接管：" + matched.reason;
+            banner.dataset.open = "true";
+            reasonEl.textContent = matched.reason;
             banner.dataset.session = matched.sessionID;
           } else {
-            banner.style.display = "none";
+            banner.dataset.open = "false";
           }
         } catch {}
       }
@@ -535,7 +813,8 @@ const CONSOLE_HTML = `<!doctype html>
       }
 
       async function sendInput(payload) {
-        statusText.textContent = "执行中…";
+        setStatus("发送中…", "busy");
+        wake();
         try {
           const res = await fetch("/api/input", {
             method: "POST",
@@ -543,67 +822,94 @@ const CONSOLE_HTML = `<!doctype html>
             body: JSON.stringify(payload),
           });
           const out = await res.json();
-          statusText.textContent = out.ok ? (out.detail || "已发送") : ("失败: " + (out.detail || ""));
+          setStatus(out.ok ? (out.detail || "已发送") : "失败：" + (out.detail || ""), out.ok ? "online" : "error");
           setTimeout(fetchFrame, 160);
         } catch (e) {
-          statusText.textContent = "发送失败: " + e.message;
+          setStatus("发送失败：" + e.message, "error");
         }
       }
 
-      img.addEventListener("click", (ev) => {
-        if (clickMode === "view") return;
+      function toMac(ev) {
         const rect = img.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
+        if (!rect.width || !rect.height) return null;
         const relX = (ev.clientX - rect.left) / rect.width;
         const relY = (ev.clientY - rect.top) / rect.height;
-        const macX = logical.x + relX * logical.w;
-        const macY = logical.y + relY * logical.h;
-        lastLogicalCenter = { x: macX, y: macY };
+        return {
+          x: logical.x + relX * logical.w,
+          y: logical.y + relY * logical.h,
+          px: ev.clientX - rect.left,
+          py: ev.clientY - rect.top,
+        };
+      }
 
+      function ripple(p) {
         const dot = document.createElement("div");
         dot.className = "dot";
-        dot.style.left = (ev.clientX - rect.left) + "px";
-        dot.style.top = (ev.clientY - rect.top) + "px";
+        dot.style.left = p.px + "px";
+        dot.style.top = p.py + "px";
         wrap.appendChild(dot);
         setTimeout(() => dot.remove(), 480);
+      }
 
-        sendInput({ kind: clickMode, x: macX, y: macY });
+      img.addEventListener("click", (ev) => {
+        setTop(false);
+        if (clickMode === "view" || !img.src) return;
+        const p = toMac(ev);
+        if (!p) return;
+        lastPoint = { x: p.x, y: p.y };
+        ripple(p);
+        sendInput({ kind: clickMode, x: p.x, y: p.y });
       });
 
       img.addEventListener("contextmenu", (ev) => {
-        if (clickMode === "view") return;
+        if (clickMode === "view" || !img.src) return;
         ev.preventDefault();
-        const rect = img.getBoundingClientRect();
-        const macX = logical.x + ((ev.clientX - rect.left) / rect.width) * logical.w;
-        const macY = logical.y + ((ev.clientY - rect.top) / rect.height) * logical.h;
-        sendInput({ kind: "right_click", x: macX, y: macY });
+        const p = toMac(ev);
+        if (!p) return;
+        lastPoint = { x: p.x, y: p.y };
+        ripple(p);
+        sendInput({ kind: "right_click", x: p.x, y: p.y });
       });
 
-      document.getElementById("textForm").addEventListener("submit", (ev) => {
+      img.addEventListener("wheel", (ev) => {
+        if (clickMode === "view" || !img.src) return;
         ev.preventDefault();
-        const input = document.getElementById("textInput");
-        if (!input.value) return;
-        const text = input.value;
-        input.value = "";
+        const now = Date.now();
+        if (now - lastWheel < 250) return;
+        lastWheel = now;
+        const p = toMac(ev);
+        if (!p) return;
+        lastPoint = { x: p.x, y: p.y };
+        sendInput({ kind: "scroll", x: p.x, y: p.y, deltaY: ev.deltaY > 0 ? -3 : 3 });
+      }, { passive: false });
+
+      textInput.addEventListener("input", () => { sendBtn.disabled = !textInput.value; });
+
+      $("textForm").addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        if (!textInput.value) return;
+        const text = textInput.value;
+        textInput.value = "";
+        sendBtn.disabled = true;
         sendInput({ kind: "type", text });
       });
 
-      document.querySelectorAll("footer button[data-key]").forEach((btn) => {
+      document.querySelectorAll("#keyBar button[data-key]").forEach((btn) => {
         btn.addEventListener("click", () => sendInput({ kind: "key", key: btn.dataset.key }));
       });
 
-      document.getElementById("scrollUpBtn").addEventListener("click", () =>
-        sendInput({ kind: "scroll", x: lastLogicalCenter.x, y: lastLogicalCenter.y, deltaY: 5 })
+      $("scrollUpBtn").addEventListener("click", () =>
+        sendInput({ kind: "scroll", x: lastPoint.x, y: lastPoint.y, deltaY: 5 })
       );
-      document.getElementById("scrollDownBtn").addEventListener("click", () =>
-        sendInput({ kind: "scroll", x: lastLogicalCenter.x, y: lastLogicalCenter.y, deltaY: -5 })
+      $("scrollDownBtn").addEventListener("click", () =>
+        sendInput({ kind: "scroll", x: lastPoint.x, y: lastPoint.y, deltaY: -5 })
       );
 
-      document.getElementById("refreshBtn").addEventListener("click", fetchFrame);
+      $("refreshBtn").addEventListener("click", fetchFrame);
       windowSelect.addEventListener("change", fetchFrame);
       fpsSelect.addEventListener("change", scheduleLoop);
 
-      document.getElementById("resumeBtn").addEventListener("click", async () => {
+      $("resumeBtn").addEventListener("click", async () => {
         const sid = banner.dataset.session || targetSession || undefined;
         await fetch("/api/resolve", {
           method: "POST",
@@ -611,7 +917,7 @@ const CONSOLE_HTML = `<!doctype html>
           body: JSON.stringify({ sessionID: sid, note: "User completed takeover via Web Console" }),
         });
         await fetchState();
-        statusText.textContent = "已交还 AI，请切回 OpenCode 查看进度";
+        setStatus("已交还 AI", "online");
       });
 
       fetchState();
