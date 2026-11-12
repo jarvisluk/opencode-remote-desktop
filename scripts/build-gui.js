@@ -25,8 +25,7 @@ const externals = [
   "electron",
 ]
 
-console.log("Building GUI bundle dist/gui-experimental.cjs...")
-await esbuild.build({
+export const guiBuildOptions = {
   entryPoints: [path.join(root, "src/gui.ts")],
   outfile: path.join(root, "dist/gui-experimental.cjs"),
   bundle: true,
@@ -36,5 +35,10 @@ await esbuild.build({
   external: externals,
   sourcemap: true,
   logLevel: "info",
-})
-console.log("GUI bundle built successfully!")
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  console.log("Building GUI bundle dist/gui-experimental.cjs...")
+  await esbuild.build(guiBuildOptions)
+  console.log("GUI bundle built successfully!")
+}
