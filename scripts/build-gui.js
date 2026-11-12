@@ -22,6 +22,7 @@ const externals = [
   "@opencode/plugin/gui/file",
   "@opencode/plugin/gui/review",
   "@opencode/plugin/gui/browser",
+  "electron",
 ]
 
 console.log("Building GUI bundle dist/gui-experimental.cjs...")
@@ -29,7 +30,7 @@ await esbuild.build({
   entryPoints: [path.join(root, "src/gui.ts")],
   outfile: path.join(root, "dist/gui-experimental.cjs"),
   bundle: true,
-  platform: "neutral",
+  platform: "browser",
   format: "cjs",
   target: "es2022",
   external: externals,

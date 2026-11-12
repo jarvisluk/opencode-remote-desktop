@@ -4,6 +4,9 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { resolveBinary, runCommand } from "./exec.ts"
 
+import { REMOTE_INPUT_KINDS, type RemoteInputKind } from "../input-types.ts"
+export { REMOTE_INPUT_KINDS, type RemoteInputKind }
+
 export interface DisplayBounds {
   readonly x: number
   readonly y: number
@@ -103,13 +106,20 @@ export async function getMacDesktopStatus(signal?: AbortSignal): Promise<MacDesk
   }
 }
 
-export async function listDisplays(signal?: AbortSignal): Promise<MacDisplayInfo[]> {
+let cachedDisplays: { data: MacDisplayInfo[]; timestamp: number } | null = null
+const DISPLAYS_CACHE_TTL_MS = 5_000
+
+export async function listDisplays(signal?: AbortSignal, forceRefresh = false): Promise<MacDisplayInfo[]> {
+  const now = Date.now()
+  if (!forceRefresh && cachedDisplays && now - cachedDisplays.timestamp < DISPLAYS_CACHE_TTL_MS) {
+    return cachedDisplays.data
+  }
   const bin = resolveBinary("agent-desktop")
   if (!bin) return []
   const res = await runCommand(bin, ["list-displays"], { timeoutMs: 8_000, signal })
   const parsed = parseJsonSafe(res.stdout)
-  if (!parsed?.ok || !Array.isArray(parsed.data)) return []
-  return parsed.data.map((d: any) => ({
+  if (!parsed?.ok || !Array.isArray(parsed.data)) return cachedDisplays?.data ?? []
+  const displays = parsed.data.map((d: any) => ({
     id: String(d.id ?? "0"),
     isPrimary: Boolean(d.is_primary),
     scale: typeof d.scale === "number" && d.scale > 0 ? d.scale : 1,
@@ -120,6 +130,8 @@ export async function listDisplays(signal?: AbortSignal): Promise<MacDisplayInfo
       height: Number(d.bounds?.height ?? 1080),
     },
   }))
+  cachedDisplays = { data: displays, timestamp: now }
+  return displays
 }
 
 export async function listWindows(app?: string, signal?: AbortSignal): Promise<MacWindowInfo[]> {
@@ -148,7 +160,55 @@ export async function listWindows(app?: string, signal?: AbortSignal): Promise<M
     }))
 }
 
-async function readImageDimensionsWithSips(filePath: string, signal?: AbortSignal): Promise<{ width: number; height: number }> {
+export function parseJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null
+  }
+  let offset = 2
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset++
+      continue
+    }
+    const marker = buffer[offset + 1]
+    offset += 2
+    // SOF markers: SOF0 (0xC0) through SOF15 (0xCF), excluding DHT (0xC4), JPG (0xC8), DAC (0xCC)
+    const isSof =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc
+    if (isSof) {
+      if (offset + 7 <= buffer.length) {
+        // [length: 2 bytes] [precision: 1 byte] [height: 2 bytes] [width: 2 bytes]
+        const height = buffer.readUInt16BE(offset + 3)
+        const width = buffer.readUInt16BE(offset + 5)
+        return { width, height }
+      }
+      break
+    }
+    if (marker === 0xd9 || marker === 0xda) {
+      // EOI or SOS (start of scan)
+      break
+    }
+    if (offset + 2 <= buffer.length) {
+      const length = buffer.readUInt16BE(offset)
+      offset += length
+    } else {
+      break
+    }
+  }
+  return null
+}
+
+async function readImageDimensions(filePath: string, jpegBuffer?: Buffer, signal?: AbortSignal): Promise<{ width: number; height: number }> {
+  if (jpegBuffer) {
+    const parsed = parseJpegDimensions(jpegBuffer)
+    if (parsed && parsed.width > 0 && parsed.height > 0) {
+      return parsed
+    }
+  }
   const res = await runCommand("sips", ["-g", "pixelWidth", "-g", "pixelHeight", filePath], {
     timeoutMs: 5_000,
     signal,
@@ -161,7 +221,40 @@ async function readImageDimensionsWithSips(filePath: string, signal?: AbortSigna
   }
 }
 
+// In-flight capture singleflight map to avoid duplicate external process calls
+const inFlightCaptures = new Map<string, Promise<CapturedFrame>>()
+
 export async function captureScreenJpeg(options?: {
+  readonly windowId?: string
+  readonly app?: string
+  readonly screenIndex?: number
+  readonly maxDimension?: number
+  readonly quality?: number
+  readonly keepFile?: boolean
+  readonly signal?: AbortSignal
+}): Promise<CapturedFrame> {
+  const cacheKey = [
+    options?.windowId ?? "",
+    options?.app ?? "",
+    options?.screenIndex ?? 0,
+    options?.maxDimension ?? 1440,
+    options?.quality ?? 72,
+    Boolean(options?.keepFile),
+  ].join(":")
+
+  const existing = inFlightCaptures.get(cacheKey)
+  if (existing) {
+    return existing
+  }
+
+  const promise = doCaptureScreenJpeg(options).finally(() => {
+    inFlightCaptures.delete(cacheKey)
+  })
+  inFlightCaptures.set(cacheKey, promise)
+  return promise
+}
+
+async function doCaptureScreenJpeg(options?: {
   readonly windowId?: string
   readonly app?: string
   readonly screenIndex?: number
@@ -179,7 +272,10 @@ export async function captureScreenJpeg(options?: {
   const quality = options?.quality ?? 72
   const signal = options?.signal
 
-  let logicalBounds: DisplayBounds = { x: 0, y: 0, width: 1920, height: 1080 }
+  // Determine fallback bounds from primary display instead of hardcoded 1920x1080
+  const displays = await listDisplays(signal)
+  const primaryDisplay = displays.find((d) => d.isPrimary) ?? displays[0]
+  let logicalBounds: DisplayBounds = primaryDisplay?.bounds ?? { x: 0, y: 0, width: 1920, height: 1080 }
 
   try {
     const adBin = resolveBinary("agent-desktop")
@@ -190,6 +286,9 @@ export async function captureScreenJpeg(options?: {
         : windows[0]
       if (matched && matched.bounds.width > 0 && matched.bounds.height > 0) {
         logicalBounds = matched.bounds
+      } else if (options.windowId || options.app) {
+        // Issue 3: If an app or windowId was explicitly requested but not found, throw error instead of using wrong bounds
+        throw new Error(`Window not found for screenshot: ${options.windowId ? `id=${options.windowId}` : `app=${options.app}`}`)
       }
 
       const args = ["screenshot"]
@@ -201,9 +300,8 @@ export async function captureScreenJpeg(options?: {
         throw new Error(`agent-desktop screenshot failed: ${shot.stderr || shot.stdout}`)
       }
     } else {
-      const displays = await listDisplays(signal)
       const idx = options?.screenIndex ?? 0
-      const targetDisplay = displays[idx] ?? displays.find((d) => d.isPrimary) ?? displays[0]
+      const targetDisplay = displays[idx] ?? primaryDisplay
       if (targetDisplay) {
         logicalBounds = targetDisplay.bounds
       }
@@ -253,10 +351,8 @@ export async function captureScreenJpeg(options?: {
       throw new Error(`sips conversion failed: ${conv.stderr || conv.stdout}`)
     }
 
-    const [dims, jpegBuffer] = await Promise.all([
-      readImageDimensionsWithSips(outJpg, signal),
-      readFile(outJpg),
-    ])
+    const jpegBuffer = await readFile(outJpg)
+    const dims = await readImageDimensions(outJpg, jpegBuffer, signal)
 
     return {
       jpegPath: outJpg,
@@ -309,7 +405,7 @@ function formatCoordPair(x: number, y: number): string {
 
 export async function injectRemoteInput(
   input: {
-    readonly kind: "click" | "double_click" | "right_click" | "scroll" | "type" | "key"
+    readonly kind: RemoteInputKind
     readonly x?: number
     readonly y?: number
     readonly deltaY?: number
@@ -356,7 +452,16 @@ export async function injectRemoteInput(
     const text = input.text ?? ""
     if (!text) return { ok: false, detail: "Empty text" }
 
-    // Preserve user clipboard, paste text into focused field via Cmd+V, then restore clipboard
+    // First try agent-desktop type directly (avoids touching clipboard and losing images/files or leaking secrets)
+    const typeArgs = ["type"]
+    if (input.app) typeArgs.push("--app", input.app)
+    typeArgs.push(text)
+    const directType = await runAgentDesktop(typeArgs, { headed: true, timeoutMs: 8_000, signal })
+    if (directType.ok) {
+      return { ok: true, detail: `Typed ${text.length} chars` }
+    }
+
+    // Fallback: paste text into focused field via Cmd+V
     const prevClip = await runAgentDesktop(["clipboard-get"], { timeoutMs: 4_000, signal })
     const previousText = typeof prevClip.parsed?.data?.text === "string" ? prevClip.parsed.data.text : null
 
@@ -371,13 +476,12 @@ export async function injectRemoteInput(
     const pasteRes = await runAgentDesktop(pasteArgs, { headed: true, timeoutMs: 6_000, signal })
 
     await new Promise((r) => setTimeout(r, 140))
+    // Only restore clipboard text if previousText was indeed string; NEVER call clipboard-clear which wipes images/files
     if (previousText !== null) {
       await runAgentDesktop(["clipboard-set", previousText], { timeoutMs: 4_000 }).catch(() => {})
-    } else {
-      await runAgentDesktop(["clipboard-clear"], { timeoutMs: 4_000 }).catch(() => {})
     }
 
-    return { ok: pasteRes.ok, detail: pasteRes.ok ? `Typed ${text.length} chars` : pasteRes.raw }
+    return { ok: pasteRes.ok, detail: pasteRes.ok ? `Typed ${text.length} chars (clipboard fallback)` : pasteRes.raw }
   }
 
   return { ok: false, detail: "Unsupported input kind" }

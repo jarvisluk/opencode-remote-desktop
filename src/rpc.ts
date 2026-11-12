@@ -1,4 +1,5 @@
 import { Rpc } from "@opencode/plugin/rpc"
+import { REMOTE_INPUT_KINDS } from "./input-types.ts"
 
 export const DotBotRpc = Rpc.define({
   id: "dotbot",
@@ -72,7 +73,7 @@ export const DotBotRpc = Rpc.define({
       input: {
         type: "object",
         properties: {
-          kind: { type: "string", enum: ["click", "double_click", "right_click", "scroll", "type", "key"] },
+          kind: { type: "string", enum: [...REMOTE_INPUT_KINDS] },
           x: { type: "number" },
           y: { type: "number" },
           deltaY: { type: "number" },

@@ -16,27 +16,31 @@ export interface RoutineRecord {
 
 const ROUTINE_PREFIX = "routines/"
 
+export function parseDailyAt(raw: string | undefined): { readonly hour: number; readonly minute: number } | null {
+  if (typeof raw !== "string") return null
+  const m = raw.trim().match(/^(\d{2}):(\d{2})$/)
+  if (!m) return null
+  const hour = Number(m[1])
+  const minute = Number(m[2])
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+  return { hour, minute }
+}
+
 export function computeNextRunAt(
   spec: { readonly everyMinutes?: number; readonly dailyAt?: string },
   now = Date.now(),
 ): number {
-  if (typeof spec.everyMinutes === "number" && spec.everyMinutes > 0) {
+  if (typeof spec.everyMinutes === "number" && spec.everyMinutes >= 1) {
     return now + Math.round(spec.everyMinutes * 60_000)
   }
-  if (typeof spec.dailyAt === "string") {
-    const m = spec.dailyAt.trim().match(/^(\d{1,2}):(\d{2})$/)
-    if (m) {
-      const hour = Number(m[1])
-      const minute = Number(m[2])
-      if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-        const candidate = new Date(now)
-        candidate.setHours(hour, minute, 0, 0)
-        if (candidate.getTime() <= now) {
-          candidate.setDate(candidate.getDate() + 1)
-        }
-        return candidate.getTime()
-      }
+  const daily = parseDailyAt(spec.dailyAt)
+  if (daily) {
+    const candidate = new Date(now)
+    candidate.setHours(daily.hour, daily.minute, 0, 0)
+    if (candidate.getTime() <= now) {
+      candidate.setDate(candidate.getDate() + 1)
     }
+    return candidate.getTime()
   }
   return now + 60 * 60_000
 }
@@ -70,13 +74,20 @@ export class RoutineScheduler {
   }
 
   async list(): Promise<RoutineRecord[]> {
-    const scan = await this.ctx.storage.scan({ prefix: ROUTINE_PREFIX, limit: 200 })
     const list: RoutineRecord[] = []
-    for (const entry of scan.entries) {
-      const val = entry.value as unknown as RoutineRecord | undefined
-      if (val && typeof val.id === "string" && typeof val.prompt === "string") {
-        list.push(val)
+    let after: string | undefined = undefined
+    while (true) {
+      const scan = await this.ctx.storage.scan({ prefix: ROUTINE_PREFIX, after, limit: 100 })
+      for (const entry of scan.entries) {
+        const val = entry.value as unknown as RoutineRecord | undefined
+        if (val && typeof val.id === "string" && typeof val.prompt === "string") {
+          list.push(val)
+        }
       }
+      if (!scan.next || scan.entries.length === 0) {
+        break
+      }
+      after = scan.next
     }
     return list.sort((a, b) => a.createdAt - b.createdAt)
   }

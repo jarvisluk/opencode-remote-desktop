@@ -14,7 +14,12 @@ const EXTRA_MACOS_PATHS = [
   "/sbin",
 ]
 
-const binaryCache = new Map<string, string | null>()
+const binaryCache = new Map<string, { path: string; timestamp: number }>()
+const BINARY_CACHE_TTL_MS = 60_000
+
+export function clearBinaryCache(): void {
+  binaryCache.clear()
+}
 
 export function buildMacOSPath(): string {
   const existing = (process.env.PATH ?? "").split(delimiter).filter(Boolean)
@@ -24,21 +29,24 @@ export function buildMacOSPath(): string {
 
 export function resolveBinary(name: string): string | null {
   const cached = binaryCache.get(name)
-  if (cached && existsSync(cached)) return cached
+  const now = Date.now()
+  if (cached && now - cached.timestamp < BINARY_CACHE_TTL_MS && existsSync(cached.path)) {
+    return cached.path
+  }
 
   const dirs = buildMacOSPath().split(delimiter).filter(Boolean)
   for (const dir of dirs) {
     const candidate = join(dir, name)
     try {
       if (existsSync(candidate) && !statSync(candidate).isDirectory()) {
-        binaryCache.set(name, candidate)
+        binaryCache.set(name, { path: candidate, timestamp: now })
         return candidate
       }
     } catch {
       // Ignore unreadable PATH entries.
     }
   }
-  binaryCache.set(name, null)
+  binaryCache.delete(name)
   return null
 }
 

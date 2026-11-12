@@ -2,7 +2,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { networkInterfaces } from "node:os"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import type { DotBotOptions } from "../options.ts"
-import { captureScreenJpeg, injectRemoteInput, listWindows } from "../macos/desktop.ts"
+import {
+  captureScreenJpeg,
+  injectRemoteInput,
+  listWindows,
+  REMOTE_INPUT_KINDS,
+  type RemoteInputKind,
+} from "../macos/desktop.ts"
 import type { TakeoverManager } from "./manager.ts"
 
 const COOKIE_NAME = "dotbot_auth"
@@ -231,8 +237,8 @@ export class WebTakeoverConsole {
 
       if (req.method === "POST" && url.pathname === "/api/input") {
         const body = await readJsonBody(req)
-        const kind = String(body.kind ?? "") as any
-        if (!["click", "double_click", "right_click", "scroll", "type", "key"].includes(kind)) {
+        const kind = String(body.kind ?? "") as RemoteInputKind
+        if (!REMOTE_INPUT_KINDS.includes(kind)) {
           res.writeHead(400, { "Content-Type": "application/json" })
           res.end(JSON.stringify({ ok: false, detail: "Invalid input kind" }))
           return
@@ -789,7 +795,9 @@ const CONSOLE_HTML = `<!doctype html>
             for (const w of data.windows || []) {
               const label = (w.title && w.title !== w.appName ? w.appName + "：" + w.title : w.appName).slice(0, 48);
               const sel = w.id === currentVal ? " selected" : "";
-              opts.push('<option value="' + w.id + '"' + sel + ">" + label.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</option>");
+              const safeId = String(w.id).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              const safeLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              opts.push('<option value="' + safeId + '"' + sel + ">" + safeLabel + "</option>");
             }
             windowSelect.innerHTML = opts.join("");
           }

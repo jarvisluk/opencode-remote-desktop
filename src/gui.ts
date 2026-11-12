@@ -5,6 +5,7 @@ import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { DotBotRpc } from "./rpc.ts"
+import type { RemoteInputKind } from "./input-types.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -25,23 +26,18 @@ interface WindowItem {
   visible: boolean
 }
 
-export function LiveScreenView(props: { session: any; screen: any }): JSX.Element {
+export function LiveScreenView(props: { session: any }): JSX.Element {
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal<boolean>(true)
   const [fps, setFps] = createSignal<number>(2) // default 2 fps for smooth low-overhead live preview
-  const [quality] = createSignal<number>(60)
-  const [maxDimension] = createSignal<number>(1280)
-  const [latencyMs, setLatencyMs] = createSignal<number>(0)
-  const [selectedApp, setSelectedApp] = createSignal<string>("")
+  const [selectedWindowId, setSelectedWindowId] = createSignal<string>("")
   const [windows, setWindows] = createSignal<WindowItem[]>([])
   const [typeText, setTypeText] = createSignal<string>("")
   const [statusText, setStatusText] = createSignal<string>("Connecting to remote screen...")
   const [takeoverActive, setTakeoverActive] = createSignal<boolean>(false)
   const [takeoverReason, setTakeoverReason] = createSignal<string>("")
 
-  let containerRef: HTMLDivElement | null = null
   let imageRef: HTMLImageElement | null = null
-  let pollTimer: any = null
   let isRequestInProgress = false
 
   const getClientRpc = () => {
@@ -80,14 +76,11 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
     isRequestInProgress = true
     const startTime = Date.now()
     try {
-      const app = selectedApp() || undefined
+      const winId = selectedWindowId() || undefined
       const res = await rpc.frame({
-        app,
-        maxDimension: maxDimension(),
-        quality: quality(),
+        windowId: winId,
       })
       const rtt = Date.now() - startTime
-      setLatencyMs(rtt)
       if (res && res.jpegBase64) {
         setFrame(res as LiveFrameState)
         setStatusText(`Live · ${rtt}ms RTT`)
@@ -152,7 +145,7 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
   }
 
   const sendRemoteInput = async (input: {
-    kind: "click" | "double_click" | "right_click" | "scroll" | "type" | "key"
+    kind: RemoteInputKind
     x?: number
     y?: number
     deltaY?: number
@@ -163,9 +156,10 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
     const rpc = getClientRpc()
     if (!rpc) return
     try {
+      const selectedWin = windows().find((w) => w.id === selectedWindowId())
       const res = await rpc.sendInput({
         ...input,
-        app: selectedApp() || undefined,
+        app: selectedWin?.appName || undefined,
       })
       if (res && res.detail) {
         setStatusText(res.detail)
@@ -239,12 +233,12 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
     setTypeText("")
   }
 
-  const handleWindowSelect = async (app: string) => {
-    setSelectedApp(app)
+  const handleWindowSelect = async (winId: string) => {
+    setSelectedWindowId(winId)
     const rpc = getClientRpc()
-    if (rpc && app) {
+    if (rpc && winId) {
       try {
-        await rpc.focusWindow({ app })
+        await rpc.focusWindow({ windowId: winId })
         setTimeout(fetchNextFrame, 200)
       } catch (e) {
         // ignore
@@ -257,34 +251,56 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
     void checkTakeovers()
     void fetchNextFrame()
 
-    const interval = Math.max(200, Math.round(1000 / fps()))
-    pollTimer = setInterval(() => {
-      void fetchNextFrame()
-    }, interval)
-
-    const takeoverTimer = setInterval(() => {
-      void checkTakeovers()
-    }, 2500)
+    // Subscribe to takeover events if supported by client RPC
+    const rpc = getClientRpc()
+    let cleanupSubscription: (() => void) | undefined
+    if (rpc?.events && typeof rpc.events.on === "function") {
+      try {
+        const unsubReq = rpc.events.on("takeoverRequested", (ev: any) => {
+          const currentSessionId = props.session?.id
+          if (!currentSessionId || ev.sessionID === currentSessionId) {
+            setTakeoverActive(true)
+            setTakeoverReason(ev.reason || "需要手动操作")
+          }
+        })
+        const unsubRes = rpc.events.on("takeoverResolved", (ev: any) => {
+          const currentSessionId = props.session?.id
+          if (!currentSessionId || ev.sessionID === currentSessionId) {
+            setTakeoverActive(false)
+            setTakeoverReason("")
+          }
+        })
+        cleanupSubscription = () => {
+          unsubReq?.()
+          unsubRes?.()
+        }
+      } catch {
+        // Fallback handled by initial check
+      }
+    }
 
     onCleanup(() => {
-      if (pollTimer) clearInterval(pollTimer)
-      clearInterval(takeoverTimer)
+      cleanupSubscription?.()
     })
   })
 
+  // Single effect with cleanup for streaming loop
   createEffect(() => {
     const curFps = fps()
-    if (pollTimer) clearInterval(pollTimer)
-    if (streaming()) {
-      const interval = Math.max(150, Math.round(1000 / curFps))
-      pollTimer = setInterval(() => {
-        void fetchNextFrame()
-      }, interval)
-    }
+    const isStreaming = streaming()
+    if (!isStreaming) return
+
+    const interval = Math.max(150, Math.round(1000 / curFps))
+    const timer = setInterval(() => {
+      void fetchNextFrame()
+    }, interval)
+
+    onCleanup(() => {
+      clearInterval(timer)
+    })
   })
 
   const element = h("div", {
-    ref: (el: HTMLDivElement) => { containerRef = el },
     style: {
       display: "flex",
       "flex-direction": "column",
@@ -342,10 +358,10 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
         "flex-wrap": "wrap",
       },
     }, [
-      // Left tools: App select & refresh
+      // Left tools: Window select & refresh
       h("div", { style: { display: "flex", "align-items": "center", gap: "6px" } }, [
         h("select", {
-          value: selectedApp,
+          value: selectedWindowId,
           onChange: (e: any) => handleWindowSelect(e.target.value),
           style: {
             background: "rgba(255, 255, 255, 0.08)",
@@ -354,12 +370,12 @@ export function LiveScreenView(props: { session: any; screen: any }): JSX.Elemen
             "border-radius": "4px",
             padding: "3px 6px",
             "font-size": "11px",
-            "max-width": "140px",
+            "max-width": "160px",
           },
         }, [
           h("option", { value: "" }, "整个屏幕 (Display)"),
           () => windows().map((w) =>
-            h("option", { value: w.appName }, `${w.appName}: ${w.title.slice(0, 20)}`)
+            h("option", { value: w.id }, `${w.appName}: ${w.title.slice(0, 20)}`)
           ),
         ]),
         h("button", {
@@ -609,7 +625,6 @@ export default Plugin.define({
       render(props: PanelProps): JSX.Element {
         return LiveScreenView({
           session: props.session,
-          screen: props.screen,
         })
       },
     })

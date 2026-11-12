@@ -51,8 +51,9 @@ export class KeepAwakeController {
   private start(): void {
     const bin = resolveBinary("caffeinate")
     if (!bin) return
-    // -d prevents display sleep (needed for macOS Screen Recording), -i prevents idle system sleep
-    const child = spawn(bin, ["-di"], {
+    // -d prevents display sleep (needed for macOS Screen Recording), -i prevents idle system sleep,
+    // -w binds lifetime to Node parent process PID so caffeinate exits automatically on parent exit/crash.
+    const child = spawn(bin, ["-di", "-w", String(process.pid)], {
       stdio: "ignore",
       detached: false,
     })
