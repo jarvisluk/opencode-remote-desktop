@@ -19,6 +19,18 @@ export interface DotBotOptions {
   readonly jpegQuality: number
   /** Poll interval in ms for 24/7 background routines. Default: 30000. */
   readonly routinePollMs: number
+  /** STUN/TURN URLs for the WebRTC live stream. Default: none (LAN / direct host candidates only). */
+  readonly iceServers: readonly string[]
+  /** Live stream frame rate. Default: 30. */
+  readonly streamFps: number
+  /** Live stream H.264 bitrate in bps. Default: 4000000. */
+  readonly streamBitrate: number
+  /** Longest edge of the live stream video. Default: 1920. */
+  readonly streamMaxDimension: number
+}
+
+function intOption(v: unknown, min: number, max: number, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback
 }
 
 export function resolveOptions(raw: Record<string, unknown> | undefined): DotBotOptions {
@@ -57,5 +69,11 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): DotBot
     maxImageDimension: maxDim,
     jpegQuality: quality,
     routinePollMs: pollMs,
+    iceServers: Array.isArray(opts.iceServers)
+      ? opts.iceServers.filter((s): s is string => typeof s === "string" && /^(stun|turns?):/.test(s))
+      : [],
+    streamFps: intOption(opts.streamFps, 5, 60, 30),
+    streamBitrate: intOption(opts.streamBitrate, 300_000, 20_000_000, 4_000_000),
+    streamMaxDimension: intOption(opts.streamMaxDimension, 640, 3840, 1920),
   }
 }

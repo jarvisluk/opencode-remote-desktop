@@ -94,6 +94,37 @@ export const DotBotRpc = Rpc.define({
         additionalProperties: false,
       },
     },
+    streamOffer: {
+      input: {
+        type: "object",
+        properties: { sdp: { type: "string" } },
+        required: ["sdp"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          sdp: { type: "string" },
+          session: { type: "string" },
+        },
+        required: ["sdp", "session"],
+        additionalProperties: false,
+      },
+    },
+    streamClose: {
+      input: {
+        type: "object",
+        properties: { session: { type: "string" } },
+        required: ["session"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
     listWindows: {
       input: {
         type: "object",

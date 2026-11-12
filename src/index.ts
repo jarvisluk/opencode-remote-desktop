@@ -12,6 +12,7 @@ import {
 import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
 import { WebTakeoverConsole } from "./takeover/web-console.ts"
+import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectDotBotStatus } from "./status.ts"
 import { registerDotBotTools } from "./tools.ts"
@@ -73,6 +74,14 @@ export default Plugin.define({
     const webConsole = new WebTakeoverConsole(options, takeovers)
     const browser = new MacBrowserController(options.reuseHostBrowser)
     const routines = new RoutineScheduler(ctx, () => awake.acquire(), options.routinePollMs)
+    const stream = StreamSidecar.available()
+      ? new StreamSidecar({
+          iceServers: options.iceServers,
+          fps: options.streamFps,
+          bitrate: options.streamBitrate,
+          maxDimension: options.streamMaxDimension,
+        })
+      : null
 
     if (isMac) {
       try {
@@ -181,6 +190,15 @@ export default Plugin.define({
         const resolved = takeovers.resolveBySession(input.sessionID, input.note)
         return { resolved: resolved.length }
       },
+      streamOffer: async (rawInput) => {
+        const { sdp } = rawInput as { sdp: string }
+        if (!stream) throw new Error("Live stream helpers are not built for this platform (run npm run build:native)")
+        return stream.offer(sdp)
+      },
+      streamClose: async (rawInput) => {
+        await stream?.close((rawInput as { session: string }).session)
+        return { ok: true }
+      },
     })
 
     const unsubReq = takeovers.onRequested((item) => {
@@ -281,6 +299,7 @@ export default Plugin.define({
       unsubReq()
       unsubRes()
       routines.dispose()
+      stream?.dispose()
       takeovers.dispose()
       awake.dispose()
       await Promise.allSettled([

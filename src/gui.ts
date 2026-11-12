@@ -6,6 +6,7 @@ import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { DotBotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
+import { LiveStreamView } from "./stream/view.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -623,9 +624,19 @@ export default Plugin.define({
         ]
       },
       render(props: PanelProps): JSX.Element {
-        return LiveScreenView({
-          session: props.session,
-        })
+        // Prefer the WebRTC stream; fall back to JPEG polling over RPC when no direct route exists.
+        const [fallback, setFallback] = createSignal("")
+        return h("div", { style: { height: "100%", width: "100%" } }, () =>
+          fallback()
+            ? LiveScreenView({ session: props.session })
+            : LiveStreamView({
+                session: props.session,
+                onUnavailable: (reason) => {
+                  console.warn("[dotbot-gui] WebRTC unavailable, falling back to JPEG:", reason)
+                  setFallback(reason)
+                },
+              }),
+        ) as unknown as JSX.Element
       },
     })
 

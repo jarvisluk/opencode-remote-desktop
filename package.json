@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-gui.js",
+    "build:native": "node scripts/build-native.js",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
