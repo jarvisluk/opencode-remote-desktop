@@ -1,7 +1,9 @@
 import { createSignal, onCleanup, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
+import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
+import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, toggleFullscreen, type Tone } from "../ui.ts"
 
 /** Which network path the OpenCode server connection uses, judged from its URL. */
 export function channelOf(server: { url?: string; local?: boolean } | undefined): string {
@@ -34,12 +36,6 @@ function isPrivateIp(host: string): boolean {
   return !!o && (o[0] === 10 || (o[0] === 192 && o[1] === 168) || (o[0] === 172 && o[1] >= 16 && o[1] <= 31))
 }
 
-export function toggleFullscreen(el: HTMLElement | undefined) {
-  if (!el) return
-  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
-  else void el.requestFullscreen().catch(() => {})
-}
-
 const ROUTE: Record<string, string> = { host: "直连", srflx: "NAT 穿透", prflx: "NAT 穿透", relay: "TURN 中继" }
 
 interface LinkStats {
@@ -55,16 +51,6 @@ interface LinkStats {
   decoder: string
 }
 
-export const btn = (active = false) => ({
-  background: active ? "rgba(37,99,235,0.35)" : "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "inherit",
-  "border-radius": "4px",
-  padding: "2px 7px",
-  "font-size": "11px",
-  cursor: "pointer",
-})
-
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 4
 
@@ -73,8 +59,8 @@ const ZOOM_MAX = 4
  * plugin RPC, so it works wherever the OpenCode server itself is reachable (LAN, OpenTunnel, ...).
  * Calls `onUnavailable` when WebRTC cannot be established so the caller can fall back to JPEG polling.
  */
-export function LiveStreamView(props: { session: any; onUnavailable: (reason: string) => void }): JSX.Element {
-  const [status, setStatus] = createSignal("Connecting…")
+export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (reason: string) => void }): JSX.Element {
+  const [status, setStatus] = createSignal("connecting")
   const [connected, setConnected] = createSignal(false)
   const [takeover, setTakeover] = createSignal("")
   // null = fit to panel; otherwise remote pixels per CSS pixel.
@@ -84,6 +70,7 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
   const [showLink, setShowLink] = createSignal(false)
   const [link, setLink] = createSignal<LinkStats | null>(null)
   const [connectMs, setConnectMs] = createSignal(0)
+  const [focused, setFocused] = createSignal(false)
 
   let root: HTMLDivElement | undefined
   let viewport: HTMLDivElement | undefined
@@ -132,11 +119,11 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
       if (s === "connected") {
         setConnected(true)
         setConnectMs(Math.round(performance.now() - started))
-        setStatus("Live · WebRTC")
+        setStatus("live")
       } else if (s === "failed") {
         giveUp("WebRTC connection failed (no direct route)")
       } else if (s === "disconnected") {
-        setStatus("Reconnecting…")
+        setStatus("reconnecting")
       }
     }
 
@@ -198,7 +185,7 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
         decoder: inbound?.decoderImplementation ?? "—",
       }
       setLink(s)
-      if (connected()) setStatus(`Live · ${s.route} · ${s.fps} fps · ${s.kbps} kbps · ${s.rtt}ms`)
+      if (pc.connectionState === "connected") setStatus("live")
     }, 1000)
   }
 
@@ -307,64 +294,30 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
   })
 
   const server = () => props.session?.server
-  const row = (label: string, value: () => string) =>
-    h("div", { style: { display: "contents" } }, [
-      h("span", { style: { color: "rgba(255,255,255,0.5)" } }, label),
-      h("span", { style: { "word-break": "break-all" } }, value),
-    ])
+  const ui = props.ui
+
+  const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.route === "TURN 中继" ? "warning" : "success")
+  const summary = () => {
+    if (!connected()) return "WebRTC 连接中"
+    if (status() === "reconnecting") return "WebRTC 重连中"
+    const s = link()
+    return s ? `WebRTC · ${s.route} · ${s.fps} fps · ${s.rtt} ms` : "WebRTC"
+  }
 
   const videoStyle = () => {
     const z = zoom()
     const { w, h: vh } = dims()
-    if (z === null || !w) return { width: "100%", height: "100%", "object-fit": "contain", outline: "none", cursor: "default", display: "block" }
-    return { width: `${Math.round(w * z)}px`, height: `${Math.round(vh * z)}px`, "max-width": "none", flex: "none", margin: "auto", "object-fit": "contain", outline: "none", cursor: "default", display: "block" }
+    const base = { "object-fit": "contain", display: "block", cursor: "default", outline: focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px" }
+    if (z === null || !w) return { ...base, width: "100%", height: "100%" }
+    return { ...base, width: `${Math.round(w * z)}px`, height: `${Math.round(vh * z)}px`, "max-width": "none", flex: "none", margin: "auto" }
   }
 
-  return h("div", {
-    ref: (el: HTMLDivElement) => { root = el },
-    style: { display: "flex", "flex-direction": "column", height: "100%", width: "100%", background: "#05070a", color: "#e6edf3", "font-size": "12px" },
-  }, [
-    () => takeover() ? h("div", {
-      style: { background: "#b91c1c", color: "#fff", padding: "6px 10px", display: "flex", "justify-content": "space-between", gap: "8px", "align-items": "center" },
-    }, [
-      h("span", {}, () => `⚠️ 人类接管中: ${takeover()}`),
-      h("button", {
-        onClick: async () => {
-          await rpc()?.resolveTakeover({ sessionID: props.session?.id, note: "User completed action in Live Screen" })
-          setTakeover("")
-        },
-        style: { background: "#fff", color: "#b91c1c", border: "none", "border-radius": "4px", padding: "3px 8px", cursor: "pointer" },
-      }, "完成并恢复 AI"),
-    ]) : null,
-    h("div", {
-      style: { display: "flex", "align-items": "center", gap: "4px", padding: "4px 8px", "flex-wrap": "wrap", "border-bottom": "1px solid rgba(255,255,255,0.08)" },
-    }, [
-      h("span", { style: { flex: "1", color: "rgba(255,255,255,0.6)", "font-size": "11px", "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, status),
-      h("button", { title: "适应面板", onClick: () => setZoom(null), style: () => btn(zoom() === null) }, "适应"),
-      h("button", { title: "原始像素 1:1", onClick: () => zoomTo(1), style: () => btn(zoom() === 1) }, "1:1"),
-      h("button", { title: "缩小（也可双指捏合）", onClick: () => zoomTo((zoom() ?? fitScale()) / 1.25), style: btn() }, "−"),
-      h("span", { style: { "min-width": "38px", "text-align": "center", "font-size": "11px" } }, () => `${Math.round((zoom() ?? fitScale()) * 100)}%`),
-      h("button", { title: "放大（也可双指捏合）", onClick: () => zoomTo((zoom() ?? fitScale()) * 1.25), style: btn() }, "+"),
-      h("button", { title: "链路信息", onClick: () => setShowLink(!showLink()), style: () => btn(showLink()) }, "ⓘ 链路"),
-      h("button", { title: "全屏（Esc 退出）", onClick: () => toggleFullscreen(root), style: () => btn(fullscreen()) }, () => fullscreen() ? "退出全屏" : "⛶ 全屏"),
-    ]),
-    () => showLink() ? h("div", {
-      style: { display: "grid", "grid-template-columns": "auto 1fr", gap: "2px 10px", padding: "6px 10px", "font-size": "11px", background: "rgba(255,255,255,0.04)", "border-bottom": "1px solid rgba(255,255,255,0.08)" },
-    }, [
-      row("服务器", () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}`),
-      row("信令通道", () => `${channelOf(server())} · ${server()?.connected ? "已连接" : "断开"}${server()?.compatible === false ? " · 版本不兼容" : ""}`),
-      row("画面模式", () => connected() ? `WebRTC H.264 · 建连 ${connectMs()}ms` : "WebRTC 协商中"),
-      row("媒体路径", () => link()?.route ?? "—"),
-      row("本端候选", () => link()?.local ?? "—"),
-      row("远端候选", () => link()?.remote ?? "—"),
-      row("往返延迟", () => link() ? `${link()!.rtt} ms · 抖动 ${link()!.jitterMs} ms` : "—"),
-      row("帧率/码率", () => link() ? `${link()!.fps} fps · ${link()!.kbps} kbps · 丢包 ${link()!.lossPct}%` : "—"),
-      row("分辨率", () => link() ? `${link()!.size} · 解码 ${link()!.decoder}` : "—"),
-      row("输入通道", () => dc?.readyState === "open" ? "DataChannel 原生键鼠" : "未就绪"),
-    ]) : null,
+  const zoomLabel = () => `${Math.round((zoom() ?? fitScale()) * 100)}%`
+
+  return h("div", { ref: (el: HTMLDivElement) => { root = el }, style: rootStyle() }, [
     h("div", {
       ref: (el: HTMLDivElement) => { viewport = el },
-      style: () => ({ flex: "1 1 0%", "min-height": "0", display: "flex", overflow: zoom() === null ? "hidden" : "auto" }),
+      style: () => ({ position: "absolute", inset: "0", display: "flex", overflow: zoom() === null ? "hidden" : "auto" }),
     }, h("video", {
       ref: (el: HTMLVideoElement) => { video = el },
       autoplay: true,
@@ -373,6 +326,8 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
       tabIndex: 0,
       onResize: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
       onLoadedMetadata: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
+      onFocus: () => setFocused(true),
+      onBlur: () => setFocused(false),
       onMouseDown: onMouse("down"),
       onMouseUp: onMouse("up"),
       onMouseMove: onMouse("move"),
@@ -383,5 +338,47 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
       onPaste,
       style: videoStyle,
     })),
+    () => connected() ? null : h("div", {
+      style: { position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center", "pointer-events": "none" },
+    }, h(ui.Loader, {})),
+    statusCard({
+      tone,
+      summary,
+      open: showLink,
+      toggle: () => setShowLink(!showLink()),
+      body: () => details([
+        { title: "通道", rows: [
+          { label: "服务器", value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
+          { label: "信令", value: () => `${channelOf(server())} · ${server()?.connected ? "已连接" : "断开"}${server()?.compatible === false ? " · 版本不兼容" : ""}` },
+        ] },
+        { title: "画面", rows: [
+          { label: "模式", value: () => connected() ? `WebRTC H.264 · 建连 ${connectMs()} ms` : "WebRTC 协商中" },
+          { label: "路径", value: () => link()?.route ?? "—" },
+          { label: "本端", value: () => link()?.local ?? "—" },
+          { label: "远端", value: () => link()?.remote ?? "—" },
+          { label: "延迟", value: () => link() ? `${link()!.rtt} ms · 抖动 ${link()!.jitterMs} ms` : "—" },
+          { label: "流量", value: () => link() ? `${link()!.fps} fps · ${link()!.kbps} kbps · 丢包 ${link()!.lossPct}%` : "—" },
+          { label: "分辨率", value: () => link() ? `${link()!.size} · ${link()!.decoder}` : "—" },
+        ] },
+        { title: "输入", rows: [
+          { label: "键鼠", value: () => (link() && dc?.readyState === "open" ? "DataChannel 原生事件" : "未就绪") },
+        ] },
+      ]),
+    }),
+    () => takeover() ? takeoverCard(ui, takeover, async () => {
+      await rpc()?.resolveTakeover({ sessionID: props.session?.id, note: "User completed action in Live Screen" })
+      setTakeover("")
+    }) : null,
+    h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
+      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => setZoom(null), pressed: () => zoom() === null }),
+      iconButton(ui, { icon: "outline-magnifier-minus", label: "缩小（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),
+      h("span", {
+        title: "原始像素 1:1",
+        onClick: () => zoomTo(1),
+        style: { "min-width": "40px", "text-align": "center", color: T.muted, "font-variant-numeric": "tabular-nums", cursor: "pointer" },
+      }, zoomLabel),
+      iconButton(ui, { icon: "outline-magnifier-plus", label: "放大（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) * 1.25) }),
+      iconButton(ui, { icon: "expand", label: "全屏（Esc 退出）", onClick: (_e) => toggleFullscreen(root), pressed: fullscreen }),
+    ]),
   ]) as unknown as JSX.Element
 }

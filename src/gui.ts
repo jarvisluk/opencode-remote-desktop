@@ -1,12 +1,13 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
-import type { MountedSession, PanelProps, PanelTab } from "@opencode/plugin/gui"
+import type { MountedSession, PanelProps, PanelTab, Ui } from "@opencode/plugin/gui"
 import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
-import { LiveStreamView, btn, channelOf, toggleFullscreen } from "./stream/view.ts"
+import { LiveStreamView, channelOf } from "./stream/view.ts"
+import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, toggleFullscreen, type Tone } from "./ui.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -44,16 +45,21 @@ const KEY_NAMES: Record<string, string> = {
   End: "end",
 }
 
-export function LiveScreenView(props: { session: any; reason?: string }): JSX.Element {
+export function LiveScreenView(props: { session: any; ui: Ui; reason?: string }): JSX.Element {
+  const ui = props.ui
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
-  const [streaming, setStreaming] = createSignal<boolean>(true)
-  const [fps, setFps] = createSignal<number>(2) // default 2 fps for smooth low-overhead live preview
-  const [selectedWindowId, setSelectedWindowId] = createSignal<string>("")
+  const [streaming, setStreaming] = createSignal(true)
+  const [fps, setFps] = createSignal(2) // default 2 fps for smooth low-overhead live preview
+  const [rtt, setRtt] = createSignal(0)
+  const [error, setError] = createSignal("")
+  const [selectedWindowId, setSelectedWindowId] = createSignal("")
   const [windows, setWindows] = createSignal<WindowItem[]>([])
-  const [typeText, setTypeText] = createSignal<string>("")
-  const [statusText, setStatusText] = createSignal<string>("Connecting to remote screen...")
-  const [takeoverActive, setTakeoverActive] = createSignal<boolean>(false)
-  const [takeoverReason, setTakeoverReason] = createSignal<string>("")
+  const [typing, setTyping] = createSignal(false)
+  const [typeText, setTypeText] = createSignal("")
+  const [takeoverReason, setTakeoverReason] = createSignal("")
+  const [showLink, setShowLink] = createSignal(false)
+  const [fullscreen, setFullscreen] = createSignal(false)
+  const [focused, setFocused] = createSignal(false)
 
   let imageRef: HTMLImageElement | null = null
   let rootRef: HTMLDivElement | undefined
@@ -62,9 +68,7 @@ export function LiveScreenView(props: { session: any; reason?: string }): JSX.El
   const getClientRpc = () => {
     try {
       const client = props.session?.server?.client
-      if (client && typeof client.rpc === "function") {
-        return client.rpc(BotRpc)
-      }
+      if (client && typeof client.rpc === "function") return client.rpc(BotRpc)
     } catch (e) {
       console.error("[bot-gui] Failed to get session server RPC client:", e)
     }
@@ -72,13 +76,9 @@ export function LiveScreenView(props: { session: any; reason?: string }): JSX.El
   }
 
   const refreshWindows = async () => {
-    const rpc = getClientRpc()
-    if (!rpc) return
     try {
-      const res = await rpc.listWindows({})
-      if (res?.windows) {
-        setWindows(res.windows)
-      }
+      const res = await getClientRpc()?.listWindows({})
+      if (res?.windows) setWindows(res.windows)
     } catch (e) {
       console.warn("[bot-gui] Failed to list windows:", e)
     }
@@ -87,154 +87,76 @@ export function LiveScreenView(props: { session: any; reason?: string }): JSX.El
   const fetchNextFrame = async () => {
     if (isRequestInProgress || !streaming()) return
     const rpc = getClientRpc()
-    if (!rpc) {
-      setStatusText("Remote server disconnected")
-      return
-    }
-
+    if (!rpc) return setError("服务器已断开")
     isRequestInProgress = true
     const startTime = Date.now()
     try {
-      const winId = selectedWindowId() || undefined
-      const res = await rpc.frame({
-        windowId: winId,
-      })
-      const rtt = Date.now() - startTime
-      if (res && res.jpegBase64) {
+      const res = await rpc.frame({ windowId: selectedWindowId() || undefined })
+      if (res?.jpegBase64) {
         setFrame(res as LiveFrameState)
-        setStatusText(`Live · ${rtt}ms RTT`)
+        setRtt(Date.now() - startTime)
+        setError("")
       }
     } catch (err: any) {
-      setStatusText(`Frame error: ${err?.message || "unknown"}`)
+      setError(err?.message || "截图失败")
     } finally {
       isRequestInProgress = false
     }
   }
 
   const checkTakeovers = async () => {
-    const rpc = getClientRpc()
-    if (!rpc) return
     try {
-      const list = await rpc.listTakeovers({})
-      const currentSessionId = props.session?.id
-      const myTakeovers = list.items.filter((item: any) => !currentSessionId || item.sessionID === currentSessionId)
-      if (myTakeovers.length > 0) {
-        setTakeoverActive(true)
-        setTakeoverReason(myTakeovers[0].reason)
-      } else {
-        setTakeoverActive(false)
-        setTakeoverReason("")
-      }
-    } catch (e) {
-      // ignore
-    }
+      const list = await getClientRpc()?.listTakeovers({})
+      const mine = list?.items.find((i: any) => !props.session?.id || i.sessionID === props.session.id)
+      setTakeoverReason(mine ? mine.reason || "需要手动操作" : "")
+    } catch {}
   }
 
   const resumeAI = async () => {
-    const rpc = getClientRpc()
-    if (!rpc) return
     try {
-      setStatusText("Resuming AI agent...")
-      await rpc.resolveTakeover({
-        sessionID: props.session?.id,
-        note: "User manually completed action in Live Screen side-panel",
-      })
-      setTakeoverActive(false)
-      setStatusText("AI agent resumed")
+      await getClientRpc()?.resolveTakeover({ sessionID: props.session?.id, note: "User completed action in Live Screen" })
+      setTakeoverReason("")
     } catch (e: any) {
-      setStatusText(`Resume error: ${e?.message}`)
+      setError(`恢复失败：${e?.message}`)
     }
   }
 
-  // Pointer coordinate transformation
   const getLogicalCoordinates = (clientX: number, clientY: number): { x: number; y: number } | null => {
-    if (!imageRef || !frame()) return null
+    const f = frame()
+    if (!imageRef || !f) return null
     const rect = imageRef.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return null
-
-    const f = frame()!
     const relX = (clientX - rect.left) / rect.width
     const relY = (clientY - rect.top) / rect.height
-
     if (relX < 0 || relX > 1 || relY < 0 || relY > 1) return null
-
-    const targetX = f.logicalX + relX * f.logicalWidth
-    const targetY = f.logicalY + relY * f.logicalHeight
-    return { x: targetX, y: targetY }
+    return { x: f.logicalX + relX * f.logicalWidth, y: f.logicalY + relY * f.logicalHeight }
   }
 
-  const sendRemoteInput = async (input: {
-    kind: RemoteInputKind
-    x?: number
-    y?: number
-    deltaY?: number
-    text?: string
-    key?: string
-    app?: string
-  }) => {
+  const sendRemoteInput = async (input: { kind: RemoteInputKind; x?: number; y?: number; deltaY?: number; text?: string; key?: string }) => {
     const rpc = getClientRpc()
     if (!rpc) return
     try {
       const selectedWin = windows().find((w) => w.id === selectedWindowId())
-      const res = await rpc.sendInput({
-        ...input,
-        app: selectedWin?.appName || undefined,
-      })
-      if (res && res.detail) {
-        setStatusText(res.detail)
-      }
+      await rpc.sendInput({ ...input, app: selectedWin?.appName || undefined })
       setTimeout(fetchNextFrame, 150)
     } catch (e: any) {
-      setStatusText(`Input error: ${e?.message}`)
+      setError(`输入失败：${e?.message}`)
     }
   }
 
-  const handleImageClick = (e: MouseEvent) => {
+  const pointer = (kind: RemoteInputKind) => (e: MouseEvent) => {
     e.preventDefault()
     const coords = getLogicalCoordinates(e.clientX, e.clientY)
-    if (!coords) return
-    void sendRemoteInput({
-      kind: "click",
-      x: coords.x,
-      y: coords.y,
-    })
-  }
-
-  const handleImageDblClick = (e: MouseEvent) => {
-    e.preventDefault()
-    const coords = getLogicalCoordinates(e.clientX, e.clientY)
-    if (!coords) return
-    void sendRemoteInput({
-      kind: "double_click",
-      x: coords.x,
-      y: coords.y,
-    })
-  }
-
-  const handleContextMenu = (e: MouseEvent) => {
-    e.preventDefault()
-    const coords = getLogicalCoordinates(e.clientX, e.clientY)
-    if (!coords) return
-    void sendRemoteInput({
-      kind: "right_click",
-      x: coords.x,
-      y: coords.y,
-    })
+    if (coords) void sendRemoteInput({ kind, ...coords })
   }
 
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault()
     const coords = getLogicalCoordinates(e.clientX, e.clientY)
-    const dy = e.deltaY > 0 ? -4 : 4
-    void sendRemoteInput({
-      kind: "scroll",
-      x: coords?.x,
-      y: coords?.y,
-      deltaY: dy,
-    })
+    void sendRemoteInput({ kind: "scroll", x: coords?.x, y: coords?.y, deltaY: e.deltaY > 0 ? -4 : 4 })
   }
 
-  // Physical keyboard while the image has focus: plain characters are typed, everything else is sent as a key combo.
+  // Physical keyboard while the picture has focus: plain characters are typed, everything else is sent as a key combo.
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.isComposing || ["Meta", "Control", "Alt", "Shift"].includes(e.key)) return
     e.preventDefault()
@@ -248,339 +170,123 @@ export function LiveScreenView(props: { session: any; reason?: string }): JSX.El
     void sendRemoteInput({ kind: "key", key: combo })
   }
 
-  const handleTextSubmit = (e: Event) => {
-    e.preventDefault()
-    const txt = typeText().trim()
+  // For IME and long text, which the per-key path cannot carry.
+  const submitText = (value: string) => {
+    const txt = value.trim()
     if (!txt) return
-    void sendRemoteInput({
-      kind: "type",
-      text: txt,
-    })
+    void sendRemoteInput({ kind: "type", text: txt })
     setTypeText("")
   }
 
   const handleWindowSelect = async (winId: string) => {
     setSelectedWindowId(winId)
-    const rpc = getClientRpc()
-    if (rpc && winId) {
-      try {
-        await rpc.focusWindow({ windowId: winId })
-        setTimeout(fetchNextFrame, 200)
-      } catch (e) {
-        // ignore
-      }
-    }
+    if (!winId) return
+    try {
+      await getClientRpc()?.focusWindow({ windowId: winId })
+      setTimeout(fetchNextFrame, 200)
+    } catch {}
   }
+
+  const onFullscreenChange = () => setFullscreen(document.fullscreenElement === rootRef)
 
   onMount(() => {
     void refreshWindows()
     void checkTakeovers()
     void fetchNextFrame()
-
-    // Subscribe to takeover events if supported by client RPC
-    const rpc = getClientRpc()
-    let cleanupSubscription: (() => void) | undefined
-    if (rpc?.events && typeof rpc.events.on === "function") {
-      try {
-        const unsubReq = rpc.events.on("takeoverRequested", (ev: any) => {
-          const currentSessionId = props.session?.id
-          if (!currentSessionId || ev.sessionID === currentSessionId) {
-            setTakeoverActive(true)
-            setTakeoverReason(ev.reason || "需要手动操作")
-          }
-        })
-        const unsubRes = rpc.events.on("takeoverResolved", (ev: any) => {
-          const currentSessionId = props.session?.id
-          if (!currentSessionId || ev.sessionID === currentSessionId) {
-            setTakeoverActive(false)
-            setTakeoverReason("")
-          }
-        })
-        cleanupSubscription = () => {
-          unsubReq?.()
-          unsubRes?.()
-        }
-      } catch {
-        // Fallback handled by initial check
-      }
-    }
-
+    const takeoverTimer = setInterval(checkTakeovers, 3000)
+    document.addEventListener("fullscreenchange", onFullscreenChange)
     onCleanup(() => {
-      cleanupSubscription?.()
+      clearInterval(takeoverTimer)
+      document.removeEventListener("fullscreenchange", onFullscreenChange)
     })
   })
 
-  // Single effect with cleanup for streaming loop
   createEffect(() => {
-    const curFps = fps()
-    const isStreaming = streaming()
-    if (!isStreaming) return
-
-    const interval = Math.max(150, Math.round(1000 / curFps))
-    const timer = setInterval(() => {
-      void fetchNextFrame()
-    }, interval)
-
-    onCleanup(() => {
-      clearInterval(timer)
-    })
+    if (!streaming()) return
+    const timer = setInterval(() => void fetchNextFrame(), Math.max(150, Math.round(1000 / fps())))
+    onCleanup(() => clearInterval(timer))
   })
 
-  const element = h("div", {
-    ref: (el: HTMLDivElement) => { rootRef = el },
-    style: {
-      display: "flex",
-      "flex-direction": "column",
-      height: "100%",
-      width: "100%",
-      overflow: "hidden",
-      background: "var(--opencode-bg, #0d1117)",
-      color: "var(--opencode-fg, #e6edf3)",
-      "font-family": "system-ui, -apple-system, sans-serif",
-      "font-size": "12px",
-    },
-  }, [
-    // Top Bar: Takeover Banner if active
-    () => takeoverActive() ? h("div", {
-      style: {
-        background: "#b91c1c",
-        color: "#ffffff",
-        padding: "8px 12px",
-        display: "flex",
-        "align-items": "center",
-        "justify-content": "space-between",
-        gap: "8px",
-        "font-weight": "600",
-        "box-shadow": "0 2px 8px rgba(0,0,0,0.3)",
-      },
-    }, [
-      h("span", { style: { "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } },
-        () => `⚠️ 人类接管中: ${takeoverReason() || "需要手动操作"}`
-      ),
-      h("button", {
-        onClick: resumeAI,
-        style: {
-          background: "#ffffff",
-          color: "#b91c1c",
-          border: "none",
-          "border-radius": "4px",
-          padding: "4px 10px",
-          "font-size": "11px",
-          "font-weight": "bold",
-          cursor: "pointer",
-        },
-      }, "完成并恢复 AI"),
-    ]) : null,
+  const server = () => props.session?.server
+  const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
+  const summary = () => error() ? `截图 · ${error()}` : !frame() ? "截图连接中" : !streaming() ? "截图 · 已暂停" : `截图 · ${fps()} fps · ${rtt()} ms`
 
-    // Header Toolbar
+  const windowOptions = () => [
+    { value: "", label: "整个屏幕" },
+    ...windows().map((w) => ({ value: w.id, label: `${w.appName}: ${w.title.slice(0, 24)}` })),
+  ]
+
+  const element = h("div", { ref: (el: HTMLDivElement) => { rootRef = el }, style: rootStyle() }, [
     h("div", {
-      style: {
-        display: "flex",
-        "align-items": "center",
-        "justify-content": "space-between",
-        padding: "6px 10px",
-        background: "rgba(255, 255, 255, 0.04)",
-        "border-bottom": "1px solid rgba(255, 255, 255, 0.08)",
-        gap: "6px",
-        "flex-wrap": "wrap",
-      },
-    }, [
-      // Left tools: Window select & refresh
-      h("div", { style: { display: "flex", "align-items": "center", gap: "6px" } }, [
-        h("select", {
-          value: selectedWindowId,
-          onChange: (e: any) => handleWindowSelect(e.target.value),
-          style: {
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            color: "inherit",
-            "border-radius": "4px",
-            padding: "3px 6px",
-            "font-size": "11px",
-            "max-width": "160px",
-          },
-        }, [
-          h("option", { value: "" }, "整个屏幕 (Display)"),
-          () => windows().map((w) =>
-            h("option", { value: w.id }, `${w.appName}: ${w.title.slice(0, 20)}`)
-          ),
-        ]),
-        h("button", {
-          onClick: refreshWindows,
-          title: "刷新窗口列表",
-          style: {
-            background: "transparent",
-            border: "1px solid rgba(255, 255, 255, 0.12)",
-            color: "inherit",
-            "border-radius": "4px",
-            padding: "3px 6px",
-            cursor: "pointer",
-            "font-size": "11px",
-          },
-        }, "⟳ 窗口"),
-      ]),
-
-      // Middle status & FPS
-      h("div", {
-        style: {
-          display: "flex",
-          "align-items": "center",
-          gap: "8px",
-          color: "rgba(255, 255, 255, 0.6)",
-          "font-size": "11px",
-        },
-      }, [
-        h("span", {}, statusText),
-        h("select", {
-          value: fps,
-          onChange: (e: any) => setFps(Number(e.target.value)),
-          title: "帧率控制",
-          style: {
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            color: "inherit",
-            "border-radius": "4px",
-            padding: "2px 4px",
-            "font-size": "10px",
-          },
-        }, [
-          h("option", { value: 1 }, "1 FPS (省流)"),
-          h("option", { value: 2 }, "2 FPS (平衡)"),
-          h("option", { value: 4 }, "4 FPS (流畅)"),
-        ]),
-      ]),
-
-      // Right: Pause / Stream toggle & manual snap
-      h("div", { style: { display: "flex", "align-items": "center", gap: "6px" } }, [
-        h("button", {
-          onClick: () => setStreaming(!streaming()),
-          style: {
-            background: () => streaming() ? "rgba(34, 197, 94, 0.2)" : "rgba(239, 68, 68, 0.2)",
-            border: () => streaming() ? "1px solid #22c55e" : "1px solid #ef4444",
-            color: () => streaming() ? "#4ade80" : "#f87171",
-            "border-radius": "4px",
-            padding: "3px 8px",
-            cursor: "pointer",
-            "font-size": "11px",
-          },
-        }, () => streaming() ? "● 实时中" : "⏸ 已暂停"),
-        h("button", {
-          onClick: fetchNextFrame,
-          title: "立即截取一帧",
-          style: {
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.12)",
-            color: "inherit",
-            "border-radius": "4px",
-            padding: "3px 6px",
-            cursor: "pointer",
-            "font-size": "11px",
-          },
-        }, "刷新帧"),
-        h("button", { title: "全屏（Esc 退出）", onClick: () => toggleFullscreen(rootRef), style: btn() }, "⛶ 全屏"),
-      ]),
-    ]),
-
-    props.reason ? h("div", {
-      style: { padding: "4px 10px", "font-size": "11px", color: "#fbbf24", background: "rgba(251,191,36,0.08)" },
-    }, `截图模式 · ${channelOf(props.session?.server)} · WebRTC 不可用：${props.reason}`) : null,
-
-    // Main Canvas / Image View
-    h("div", {
-      style: {
-        flex: "1 1 0%",
-        display: "flex",
-        "align-items": "center",
-        "justify-content": "center",
-        position: "relative",
-        background: "#05070a",
-        overflow: "hidden",
-        padding: "4px",
-        cursor: "crosshair",
-        "user-select": "none",
-        outline: "none",
-      },
       tabIndex: 0,
       onMouseDown: (e: MouseEvent) => (e.currentTarget as HTMLElement).focus(),
+      onFocus: () => setFocused(true),
+      onBlur: () => setFocused(false),
       onKeyDown: handleKeyDown,
-      onContextMenu: handleContextMenu,
+      onContextMenu: pointer("right_click"),
       onWheel: handleWheel,
-    }, [
-      () => frame()?.jpegBase64 ? h("img", {
-        ref: (el: HTMLImageElement) => { imageRef = el },
-        src: () => `data:image/jpeg;base64,${frame()!.jpegBase64}`,
-        onClick: handleImageClick,
-        onDblClick: handleImageDblClick,
-        style: {
-          "max-width": "100%",
-          "max-height": "100%",
-          "object-fit": "contain",
-          "box-shadow": "0 4px 20px rgba(0,0,0,0.5)",
-          "border-radius": "4px",
-          display: "block",
-        },
-      }) : h("div", {
-        style: {
-          display: "flex",
-          "flex-direction": "column",
-          "align-items": "center",
-          gap: "10px",
-          color: "rgba(255, 255, 255, 0.4)",
-        },
-      }, [
-        h("div", { style: { "font-size": "24px" } }, "🖥️"),
-        h("div", {}, "等待远程桌面画面..."),
+      style: () => ({
+        position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center",
+        cursor: "crosshair", "user-select": "none", outline: focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px",
+      }),
+    }, () => frame()?.jpegBase64
+      ? h("img", {
+          ref: (el: HTMLImageElement) => { imageRef = el },
+          src: () => `data:image/jpeg;base64,${frame()!.jpegBase64}`,
+          onClick: pointer("click"),
+          onDblClick: pointer("double_click"),
+          draggable: false,
+          style: { "max-width": "100%", "max-height": "100%", "object-fit": "contain", display: "block" },
+        })
+      : h(ui.Loader, {})),
+    statusCard({
+      tone,
+      summary,
+      open: showLink,
+      toggle: () => setShowLink(!showLink()),
+      body: () => details([
+        { title: "通道", rows: [
+          { label: "服务器", value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
+          { label: "信令", value: () => `${channelOf(server())} · ${server()?.connected ? "已连接" : "断开"}${server()?.compatible === false ? " · 版本不兼容" : ""}` },
+        ] },
+        { title: "画面", rows: [
+          { label: "模式", value: () => `截图轮询 · ${fps()} fps` },
+          { label: "原因", value: () => props.reason ? `WebRTC 不可用：${props.reason}` : "—" },
+          { label: "往返", value: () => `${rtt()} ms` },
+          { label: "分辨率", value: () => frame() ? `${frame()!.imageWidth}×${frame()!.imageHeight}` : "—" },
+        ] },
+        { title: "输入", rows: [{ label: "键鼠", value: () => "agent-desktop 逐条注入" }] },
       ]),
-    ]),
-
-    // Bottom Action Bar: Key shortcuts & Quick text input
-    h("div", {
-      style: {
-        display: "flex",
-        "flex-direction": "column",
-        gap: "6px",
-        padding: "8px 10px",
-        background: "rgba(255, 255, 255, 0.03)",
-        "border-top": "1px solid rgba(255, 255, 255, 0.08)",
-      },
-    }, [
-      // Direct Text Typing Row
-      h("form", {
-        onSubmit: handleTextSubmit,
-        style: {
-          display: "flex",
-          gap: "6px",
-        },
-      }, [
-        h("input", {
-          type: "text",
-          placeholder: "输入文字并按发送 (注入当前焦点窗口)...",
-          value: typeText,
-          onInput: (e: any) => setTypeText(e.target.value),
-          style: {
-            flex: "1",
-            background: "rgba(255, 255, 255, 0.06)",
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            "border-radius": "4px",
-            padding: "4px 8px",
-            color: "inherit",
-            "font-size": "11px",
-            outline: "none",
-          },
+    }),
+    () => takeoverReason() ? takeoverCard(ui, takeoverReason, () => void resumeAI()) : null,
+    h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
+      () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
+        label: "输入文字",
+        placeholder: "输入文字后回车，发往当前焦点窗口",
+        value: typeText,
+        onInput: (value: string) => setTypeText(value),
+        onSubmit: (value: string) => submitText(value),
+        autofocus: true,
+      })) : null,
+      h("div", { style: { display: "flex", "align-items": "center", gap: T.sp(0.5) } }, [
+        h(ui.Select, {
+          label: "画面范围",
+          options: windowOptions,
+          value: selectedWindowId,
+          onChange: (value: string) => void handleWindowSelect(value),
+          placement: "top-end",
         }),
-        h("button", {
-          type: "submit",
-          style: {
-            background: "#2563eb",
-            border: "none",
-            color: "#ffffff",
-            "border-radius": "4px",
-            padding: "4px 12px",
-            "font-size": "11px",
-            "font-weight": "500",
-            cursor: "pointer",
-          },
-        }, "键入文本"),
+        iconButton(ui, { icon: "outline-rotate-clockwise", label: "刷新窗口列表", onClick: (_e) => void refreshWindows() }),
+        h(ui.Select, {
+          label: "帧率",
+          options: () => [{ value: "1", label: "1 fps" }, { value: "2", label: "2 fps" }, { value: "4", label: "4 fps" }],
+          value: () => String(fps()),
+          onChange: (value: string) => setFps(Number(value)),
+          placement: "top-end",
+        }),
+        iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
+        iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
+        iconButton(ui, { icon: "expand", label: "全屏（Esc 退出）", onClick: (_e) => toggleFullscreen(rootRef), pressed: fullscreen }),
       ]),
     ]),
   ])
@@ -626,9 +332,10 @@ export default Plugin.define({
         const [fallback, setFallback] = createSignal("")
         return h("div", { style: { height: "100%", width: "100%" } }, () =>
           fallback()
-            ? LiveScreenView({ session: props.session, reason: fallback() })
+            ? LiveScreenView({ session: props.session, ui: ctx.ui, reason: fallback() })
             : LiveStreamView({
                 session: props.session,
+                ui: ctx.ui,
                 onUnavailable: (reason) => {
                   console.warn("[bot-gui] WebRTC unavailable, falling back to JPEG:", reason)
                   setFallback(reason)
