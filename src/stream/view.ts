@@ -66,6 +66,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   // null = fit to panel; otherwise remote pixels per CSS pixel.
   const [zoom, setZoom] = createSignal<number | null>(null)
   const [dims, setDims] = createSignal({ w: 0, h: 0 })
+  const [box, setBox] = createSignal({ w: 0, h: 0 })
   const [showLink, setShowLink] = createSignal(false)
   const [link, setLink] = createSignal<LinkStats | null>(null)
   const [connectMs, setConnectMs] = createSignal(0)
@@ -224,8 +225,9 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   // Scale the fit view would use, so zoom steps start from what the user currently sees.
   const fitScale = () => {
     const { w, h: vh } = dims()
-    if (!viewport || !w) return 1
-    return Math.min(viewport.clientWidth / w, viewport.clientHeight / vh)
+    const b = box()
+    if (!w || !b.w) return 1
+    return Math.min(b.w / w, b.h / vh)
   }
 
   const zoomTo = (next: number, anchor?: { clientX: number; clientY: number }) => {
@@ -311,7 +313,12 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
 
   return h("div", { ref: (el: HTMLDivElement) => { root = el }, style: rootStyle() }, [
     h("div", {
-      ref: (el: HTMLDivElement) => { viewport = el },
+      ref: (el: HTMLDivElement) => {
+        viewport = el
+        const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
+        ro.observe(el)
+        onCleanup(() => ro.disconnect())
+      },
       style: () => ({ position: "absolute", inset: "0", display: "flex", overflow: zoom() === null ? "hidden" : "auto" }),
     }, h("video", {
       ref: (el: HTMLVideoElement) => { video = el },
