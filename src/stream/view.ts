@@ -373,7 +373,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
       setTakeover("")
     }) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
-      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => setZoom(null), pressed: () => zoom() === null }),
+      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => setZoom(null) }),
       iconButton(ui, { icon: "outline-magnifier-minus", label: "缩小（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),
       h("span", {
         title: "原始像素 1:1",
