@@ -7,7 +7,7 @@ import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
-import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -157,7 +157,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
 
   // Physical keyboard while the picture has focus: plain characters are typed, everything else is sent as a key combo.
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.isComposing || ["Meta", "Control", "Alt", "Shift"].includes(e.key)) return
+    if (e.isComposing || isFullscreenKey(e) || ["Meta", "Control", "Alt", "Shift"].includes(e.key)) return
     e.preventDefault()
     const shortcut = e.metaKey || e.ctrlKey || e.altKey
     if (e.key.length === 1 && !shortcut) {
@@ -283,7 +283,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
         }),
         iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
         iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
-        iconButton(ui, { icon: "expand", label: "铺满窗口", onClick: (_e) => fill.toggle(), pressed: fill.on }),
+        iconButton(ui, { icon: "expand", label: "铺满窗口（⌃⌘F 全屏）", onClick: (_e) => fill.toggle(), pressed: fill.on }),
       ]),
     ]),
   ])

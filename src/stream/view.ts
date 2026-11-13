@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
-import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
+import { T, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
 
 /** Which network path the OpenCode server connection uses, judged from its URL. */
 export function channelOf(server: { url?: string; local?: boolean } | undefined): string {
@@ -253,7 +253,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   }
 
   const onKey = (t: "keydown" | "keyup") => (e: KeyboardEvent) => {
-    if (e.isComposing) return
+    if (e.isComposing || isFullscreenKey(e)) return
     e.preventDefault()
     // Printable keys without shortcut modifiers go as text so the remote keyboard layout doesn't matter.
     if (t === "keydown" && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -381,7 +381,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
         style: { "min-width": "40px", "text-align": "center", color: T.muted, "font-variant-numeric": "tabular-nums", cursor: "pointer" },
       }, zoomLabel),
       iconButton(ui, { icon: "outline-magnifier-plus", label: "放大（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) * 1.25) }),
-      iconButton(ui, { icon: "expand", label: "铺满窗口", onClick: (_e) => fill.toggle(), pressed: fill.on }),
+      iconButton(ui, { icon: "expand", label: "铺满窗口（⌃⌘F 全屏）", onClick: (_e) => fill.toggle(), pressed: fill.on }),
     ]),
   ]) as unknown as JSX.Element
 }

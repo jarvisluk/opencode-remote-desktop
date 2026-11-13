@@ -31,7 +31,8 @@ export function floating(corner: Corner, extra: JSX.CSSProperties = {}): JSX.CSS
   const [y, x] = corner.split("-")
   return {
     position: "absolute",
-    [y]: T.sp(2),
+    // --bot-inset-top keeps top cards clear of the window controls while the view fills a non-fullscreen window.
+    [y]: y === "top" ? `calc(${T.sp(2)} + var(--bot-inset-top, 0px))` : T.sp(2),
     [x]: T.sp(2),
     "max-width": `calc(100% - ${T.sp(4)})`,
     background: T.bgLayer,
@@ -119,13 +120,29 @@ export function takeoverCard(ui: Ui, reason: () => string, resume: () => void): 
   ]) as unknown as JSX.Element
 }
 
+// Height of the window controls (macOS traffic lights, Windows caption buttons) drawn over a frameless window.
+const WINDOW_CONTROLS = "40px"
+
+const screenFull = () => window.outerWidth >= screen.width && window.outerHeight >= screen.height
+
+/** OpenCode's "Toggle Full Screen" menu shortcut. Views must let it through instead of sending it to the remote. */
+export const isFullscreenKey = (e: KeyboardEvent) => e.ctrlKey && e.metaKey && !e.altKey && e.code === "KeyF"
+
 /**
- * Lets a view fill the whole OpenCode window. HTML fullscreen never completes in the Desktop shell, and the panel's
+ * Lets a view fill the whole OpenCode window. HTML fullscreen never completes in the Desktop shell, and plugins
+ * cannot reach the window's own fullscreen, so true fullscreen is the user's ⌃⌘F on top of this. The panel's
  * `contain` ancestors trap `position: fixed`, so the view is moved under <body> while filled. Call inside a component.
  */
 export function windowFill(el: () => HTMLElement | undefined) {
   const [on, setOn] = createSignal(false)
+  const [full, setFull] = createSignal(screenFull())
   let mark: Comment | null = null
+  const inset = () => el()?.style.setProperty("--bot-inset-top", on() && !full() ? WINDOW_CONTROLS : "0px")
+  const onResize = () => {
+    setFull(screenFull())
+    inset()
+  }
+  window.addEventListener("resize", onResize)
   // Moving a <video> in the DOM pauses it.
   const replay = (n: HTMLElement) => n.querySelectorAll("video").forEach((v) => void v.play().catch(() => {}))
   const enter = () => {
@@ -136,6 +153,7 @@ export function windowFill(el: () => HTMLElement | undefined) {
     Object.assign(n.style, { position: "fixed", inset: "0", zIndex: "40" })
     document.body.appendChild(n)
     setOn(true)
+    inset()
     replay(n)
   }
   const exit = () => {
@@ -145,20 +163,25 @@ export function windowFill(el: () => HTMLElement | undefined) {
     mark.replaceWith(n)
     mark = null
     setOn(false)
+    inset()
     replay(n)
   }
-  // Esc inside the picture belongs to the remote machine.
+  // Esc inside the picture belongs to the remote machine. ⌃⌘F from the picture or while filled takes the window to
+  // true fullscreen (the app's own menu shortcut) with the view filling it, and back.
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && on() && !(e.target as Element | null)?.closest?.("[data-bot-screen]")) exit()
+    const inScreen = !!(e.target as Element | null)?.closest?.("[data-bot-screen]")
+    if (e.key === "Escape" && on() && !inScreen) exit()
+    if (isFullscreenKey(e) && (inScreen || on())) full() ? exit() : enter()
   }
   document.addEventListener("keydown", onKey)
   onCleanup(() => {
     document.removeEventListener("keydown", onKey)
+    window.removeEventListener("resize", onResize)
     if (mark) {
       el()?.remove()
       mark.remove()
       mark = null
     }
   })
-  return { on, toggle: () => (on() ? exit() : enter()) }
+  return { on, full, toggle: () => (on() ? exit() : enter()) }
 }
