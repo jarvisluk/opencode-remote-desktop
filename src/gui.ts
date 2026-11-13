@@ -45,7 +45,7 @@ const KEY_NAMES: Record<string, string> = {
   End: "end",
 }
 
-export function LiveScreenView(props: { session: any; ui: Ui; reason?: string }): JSX.Element {
+export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; onRetryStream?: () => void }): JSX.Element {
   const ui = props.ui
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal(true)
@@ -287,6 +287,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
           onChange: (value: string) => void handleWindowSelect(value),
           placement: "top-end",
         }),
+        iconButton(ui, { icon: "monitor", label: "重新连接 WebRTC", onClick: (_e) => props.onRetryStream?.() }),
         iconButton(ui, { icon: "outline-rotate-clockwise", label: "刷新窗口列表", onClick: (_e) => void refreshWindows() }),
         iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
         iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
@@ -336,7 +337,7 @@ export default Plugin.define({
         const [fallback, setFallback] = createSignal("")
         return h("div", { style: { height: "100%", width: "100%" } }, () =>
           fallback()
-            ? LiveScreenView({ session: props.session, ui: ctx.ui, reason: fallback() })
+            ? LiveScreenView({ session: props.session, ui: ctx.ui, reason: fallback(), onRetryStream: () => setFallback("") })
             : LiveStreamView({
                 session: props.session,
                 ui: ctx.ui,
