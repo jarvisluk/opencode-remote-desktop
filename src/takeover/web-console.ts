@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { networkInterfaces } from "node:os"
 import { randomBytes, timingSafeEqual } from "node:crypto"
-import type { DotBotOptions } from "../options.ts"
+import type { BotOptions } from "../options.ts"
 import {
   captureScreenJpeg,
   injectRemoteInput,
@@ -11,7 +11,7 @@ import {
 } from "../macos/desktop.ts"
 import type { TakeoverManager } from "./manager.ts"
 
-const COOKIE_NAME = "dotbot_auth"
+const COOKIE_NAME = "bot_auth"
 
 function safeTokenEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8")
@@ -90,10 +90,10 @@ export class WebTakeoverConsole {
   private server: Server | null = null
   private boundPort: number | null = null
   private readonly token = randomBytes(24).toString("base64url")
-  private readonly options: DotBotOptions
+  private readonly options: BotOptions
   private readonly takeovers: TakeoverManager
 
-  constructor(options: DotBotOptions, takeovers: TakeoverManager) {
+  constructor(options: BotOptions, takeovers: TakeoverManager) {
     this.options = options
     this.takeovers = takeovers
   }
@@ -155,7 +155,7 @@ export class WebTakeoverConsole {
     if (queryToken && safeTokenEquals(queryToken, this.token)) {
       return { ok: true, fromQuery: true }
     }
-    const headerToken = req.headers["x-dotbot-token"]
+    const headerToken = req.headers["x-bot-token"]
     if (typeof headerToken === "string" && safeTokenEquals(headerToken, this.token)) {
       return { ok: true, fromQuery: false }
     }

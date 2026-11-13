@@ -1,6 +1,6 @@
-// dotbot-stream: cross-platform WebRTC sidecar.
+// bot-stream: cross-platform WebRTC sidecar.
 //
-// It spawns the platform capture helper (dotbot-capture-<os>-<arch>), packetizes its H.264
+// It spawns the platform capture helper (bot-capture-<os>-<arch>), packetizes its H.264
 // output into a WebRTC video track and forwards DataChannel input events back to the helper.
 // Signaling happens over stdin/stdout JSON lines with the OpenCode plugin process:
 //
@@ -64,7 +64,7 @@ var inputTypes = map[string]bool{"move": true, "down": true, "up": true, "wheel"
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
-	log.SetPrefix("[dotbot-stream] ")
+	log.SetPrefix("[bot-stream] ")
 	if *capturePath == "" {
 		log.Fatal("--capture is required")
 	}
@@ -73,7 +73,7 @@ func main() {
 		MimeType:    webrtc.MimeTypeH264,
 		ClockRate:   90000,
 		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-	}, "video", "dotbot-screen")
+	}, "video", "bot-screen")
 	if err != nil {
 		log.Fatal(err)
 	}

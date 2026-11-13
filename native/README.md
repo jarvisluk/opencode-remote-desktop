@@ -4,16 +4,16 @@ Built into `dist/bin` by `npm run build:native` (needs Go; on macOS also Swift).
 
 | Binary | Language | Role |
 |---|---|---|
-| `dotbot-stream-<platform>-<arch>` | Go + pion/webrtc | WebRTC peer, one shared H.264 track for all viewers, input DataChannel. Platform-independent. |
-| `dotbot-capture-<platform>-<arch>` | per platform | Screen capture + hardware H.264 encode + input injection. |
+| `bot-stream-<platform>-<arch>` | Go + pion/webrtc | WebRTC peer, one shared H.264 track for all viewers, input DataChannel. Platform-independent. |
+| `bot-capture-<platform>-<arch>` | per platform | Screen capture + hardware H.264 encode + input injection. |
 
-The plugin talks to `dotbot-stream` over stdin/stdout JSON lines (`offer` → `answer`, `close`);
+The plugin talks to `bot-stream` over stdin/stdout JSON lines (`offer` → `answer`, `close`);
 signaling travels over the plugin RPC (`streamOffer` / `streamClose`), so it works wherever the
 OpenCode server is reachable. Media goes peer-to-peer.
 
 ## Capture backend contract
 
-Adding Windows/Linux only means writing another `dotbot-capture` that honours this contract:
+Adding Windows/Linux only means writing another `bot-capture` that honours this contract:
 
 - args: `--fps N --bitrate BPS --max-dim PX --display I`
 - stdout: `[u32 BE length][u64 BE pts µs][u8 flags, 1 = keyframe][H.264 Annex-B, constrained baseline, SPS/PPS before keyframes]`

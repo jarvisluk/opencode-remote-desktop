@@ -1,4 +1,4 @@
-module github.com/opencode-dotbot/stream
+module github.com/opencode-bot/stream
 
 go 1.24.3
 

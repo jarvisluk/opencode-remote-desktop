@@ -20,7 +20,7 @@ export interface StreamOptions {
 
 type Pending = { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }
 
-/** Owns the dotbot-stream sidecar (WebRTC) and talks to it over JSON lines. */
+/** Owns the bot-stream sidecar (WebRTC) and talks to it over JSON lines. */
 export class StreamSidecar {
   private proc: ChildProcessWithoutNullStreams | null = null
   private nextId = 1
@@ -32,13 +32,13 @@ export class StreamSidecar {
   }
 
   static available(): boolean {
-    return existsSync(binary("dotbot-stream")) && existsSync(binary("dotbot-capture"))
+    return existsSync(binary("bot-stream")) && existsSync(binary("bot-capture"))
   }
 
   private ensure(): ChildProcessWithoutNullStreams {
     if (this.proc) return this.proc
-    const proc = spawn(binary("dotbot-stream"), [
-      "--capture", binary("dotbot-capture"),
+    const proc = spawn(binary("bot-stream"), [
+      "--capture", binary("bot-capture"),
       "--ice", this.options.iceServers.join(","),
       "--fps", String(this.options.fps),
       "--bitrate", String(this.options.bitrate),

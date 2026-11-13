@@ -4,7 +4,7 @@ import type { PanelProps, PanelTab } from "@opencode/plugin/gui"
 import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
-import { DotBotRpc } from "./rpc.ts"
+import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView } from "./stream/view.ts"
 
@@ -45,10 +45,10 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
     try {
       const client = props.session?.server?.client
       if (client && typeof client.rpc === "function") {
-        return client.rpc(DotBotRpc)
+        return client.rpc(BotRpc)
       }
     } catch (e) {
-      console.error("[dotbot-gui] Failed to get session server RPC client:", e)
+      console.error("[bot-gui] Failed to get session server RPC client:", e)
     }
     return null
   }
@@ -62,7 +62,7 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
         setWindows(res.windows)
       }
     } catch (e) {
-      console.warn("[dotbot-gui] Failed to list windows:", e)
+      console.warn("[bot-gui] Failed to list windows:", e)
     }
   }
 
@@ -632,7 +632,7 @@ export default Plugin.define({
             : LiveStreamView({
                 session: props.session,
                 onUnavailable: (reason) => {
-                  console.warn("[dotbot-gui] WebRTC unavailable, falling back to JPEG:", reason)
+                  console.warn("[bot-gui] WebRTC unavailable, falling back to JPEG:", reason)
                   setFallback(reason)
                 },
               }),

@@ -1,6 +1,6 @@
 export type KeepAwakeMode = "off" | "active" | "always"
 
-export interface DotBotOptions {
+export interface BotOptions {
   /** Bind address for the Web/Mobile Takeover Console. Default: "0.0.0.0" (reachable via LAN/Tailscale with token). */
   readonly consoleHost: string
   /** Port for the Web/Mobile Takeover Console. Set 0 for OS-assigned port. Default: 49375. */
@@ -33,7 +33,7 @@ function intOption(v: unknown, min: number, max: number, fallback: number): numb
   return typeof v === "number" && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback
 }
 
-export function resolveOptions(raw: Record<string, unknown> | undefined): DotBotOptions {
+export function resolveOptions(raw: Record<string, unknown> | undefined): BotOptions {
   const opts = raw ?? {}
   const keepAwakeRaw = opts.keepAwake
   const keepAwake: KeepAwakeMode =

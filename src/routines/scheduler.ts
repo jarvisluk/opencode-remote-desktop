@@ -103,7 +103,7 @@ export class RoutineScheduler {
     const now = Date.now()
     let sessionID: string | undefined
     if (input.reuseSession !== false) {
-      const created = await this.ctx.session.create({ title: `[DotBot Routine] ${input.name}` })
+      const created = await this.ctx.session.create({ title: `[Bot Routine] ${input.name}` })
       sessionID = created.id
     }
     const record: RoutineRecord = {
@@ -172,7 +172,7 @@ export class RoutineScheduler {
       let targetSessionID = routine.sessionID
       if (!targetSessionID) {
         const created = await this.ctx.session.create({
-          title: `[DotBot] ${routine.name} (${new Date(now).toLocaleString()})`,
+          title: `[Bot] ${routine.name} (${new Date(now).toLocaleString()})`,
         })
         targetSessionID = created.id
       }
@@ -187,7 +187,7 @@ export class RoutineScheduler {
 
       await this.ctx.session.prompt({
         sessionID: targetSessionID as any,
-        text: `[DotBot Scheduled Routine: ${routine.name}]\n\n${routine.prompt}`,
+        text: `[Bot Scheduled Routine: ${routine.name}]\n\n${routine.prompt}`,
         delivery: "queue",
       })
       return { ok: true, sessionID: targetSessionID }

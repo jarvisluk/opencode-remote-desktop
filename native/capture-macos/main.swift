@@ -1,4 +1,4 @@
-// dotbot-capture (macOS backend)
+// bot-capture (macOS backend)
 //
 // Contract shared by every platform backend (see native/README.md):
 //   stdout: binary frames  [u32 BE length][u64 BE pts µs][u8 flags (1 = keyframe)][H.264 Annex-B]
@@ -47,7 +47,7 @@ struct Options {
 }
 
 let options = Options(CommandLine.arguments)
-let writeQueue = DispatchQueue(label: "dotbot.capture.write")
+let writeQueue = DispatchQueue(label: "bot.capture.write")
 let stdoutHandle = FileHandle.standardOutput
 let startCodes = Data([0, 0, 0, 1])
 
@@ -335,7 +335,7 @@ Task {
   let input = Input(displayID: display.displayID)
   let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: capture)
   do {
-    try stream.addStreamOutput(capture, type: .screen, sampleHandlerQueue: DispatchQueue(label: "dotbot.capture.frames"))
+    try stream.addStreamOutput(capture, type: .screen, sampleHandlerQueue: DispatchQueue(label: "bot.capture.frames"))
     try await stream.startCapture()
   } catch {
     fail("start capture failed: \(error.localizedDescription)")

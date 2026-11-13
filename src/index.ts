@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { Plugin, Skill } from "@opencode/plugin"
 import { resolveOptions } from "./options.ts"
-import { DotBotRpc } from "./rpc.ts"
+import { BotRpc } from "./rpc.ts"
 import { KeepAwakeController } from "./macos/awake.ts"
 import {
   captureScreenJpeg,
@@ -14,9 +14,9 @@ import { TakeoverManager } from "./takeover/manager.ts"
 import { WebTakeoverConsole } from "./takeover/web-console.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
-import { collectDotBotStatus } from "./status.ts"
-import { registerDotBotTools } from "./tools.ts"
-import { registerDotBotCommands } from "./commands.ts"
+import { collectBotStatus } from "./status.ts"
+import { registerBotTools } from "./tools.ts"
+import { registerBotCommands } from "./commands.ts"
 
 // Match keywords on word boundaries for Latin words, or literal substring for Chinese characters
 const HIGH_RISK_KEYWORDS = [
@@ -53,7 +53,7 @@ export function containsHighRiskIntent(values: readonly string[]): string | null
   return null
 }
 
-const OPERATOR_SKILL_CONTENT = `# DotBot macOS Operator Guide
+const OPERATOR_SKILL_CONTENT = `# Bot macOS Operator Guide
 
 You have access to \`computer_*\` tools that directly control the **macOS server** hosting OpenCode.
 Use \`computer_screenshot\` to inspect what's on screen, \`computer_desktop\` to interact via accessibility tree,
@@ -64,7 +64,7 @@ Keep actions safe, concise, and confirm after mutations.
 `
 
 export default Plugin.define({
-  id: "dotbot",
+  id: "bot",
   async setup(ctx) {
     const options = resolveOptions(ctx.options as Record<string, unknown> | undefined)
     const isMac = process.platform === "darwin"
@@ -87,15 +87,15 @@ export default Plugin.define({
       try {
         await webConsole.start()
       } catch (err) {
-        console.error("[dotbot] Failed to start WebTakeoverConsole, disabling web console feature:", err)
+        console.error("[bot] Failed to start WebTakeoverConsole, disabling web console feature:", err)
       }
       routines.start()
     }
 
     // 1. Cross-network RPC registration (usable by @opencode/client, TUI, Desktop, or external scripts)
-    const rpcReg = await ctx.rpc.register(DotBotRpc, {
+    const rpcReg = await ctx.rpc.register(BotRpc, {
       status: async (_input, callCtx) => {
-        const summary = await collectDotBotStatus({
+        const summary = await collectBotStatus({
           awake,
           browser,
           webConsole,
@@ -219,14 +219,14 @@ export default Plugin.define({
 
     // 2. Permission guardrail hook: escalate high-risk GUI/Browser mutations to interactive Web approval
     const permHookReg = await ctx.permission.hook("evaluate", (event) => {
-      if (!event.action.startsWith("dotbot.")) return
+      if (!event.action.startsWith("bot.")) return
       const matchedKeyword = containsHighRiskIntent([
         ...event.resources,
         JSON.stringify(event.metadata ?? {}),
       ])
       if (matchedKeyword && event.effect === "allow") {
         event.effect = "ask"
-        event.message = `DotBot 检测到敏感操作关键词「${matchedKeyword}」，请确认是否允许在 Mac 上执行。`
+        event.message = `Bot 检测到敏感操作关键词「${matchedKeyword}」，请确认是否允许在 Mac 上执行。`
       }
     })
 
@@ -242,28 +242,28 @@ export default Plugin.define({
     // 4. Context hook: inform the model about host Mac capabilities & Web Console availability (WITHOUT secret tokens)
     const contextHookReg = await ctx.session.hook("context", (event) => {
       if (!isMac) return
-      const consoleState = options.consoleEnabled ? "Web Console available (run /dotbot to get access link)" : "Web Console disabled"
+      const consoleState = options.consoleEnabled ? "Web Console available (run /bot to get access link)" : "Web Console disabled"
       event.system.push({
         type: "text",
-        text: `[DotBot macOS Host Active] You can operate this Mac mini's desktop GUI (\`computer_desktop\`), signed-in browser (\`computer_browser\`), screenshots (\`computer_screenshot\`), 24/7 routines (\`computer_routine\`), and human takeover (\`computer_request_takeover\`). ${consoleState}`,
+        text: `[Bot macOS Host Active] You can operate this Mac mini's desktop GUI (\`computer_desktop\`), signed-in browser (\`computer_browser\`), screenshots (\`computer_screenshot\`), 24/7 routines (\`computer_routine\`), and human takeover (\`computer_request_takeover\`). ${consoleState}`,
       } as any)
     })
 
     // 5. Embedded Operator Skill
     const skillReg = await ctx.skill.transform((editor) => {
       editor.add({
-        id: Skill.ID.make("dotbot-macos-operator"),
-        name: Skill.Name.make("DotBot macOS Operator"),
+        id: Skill.ID.make("bot-macos-operator"),
+        name: Skill.Name.make("Bot macOS Operator"),
         description:
           "Operate the macOS host desktop GUI, signed-in browser, screenshots, human takeover (2FA, QR login, Passkey), and 24/7 background routines.",
-        path: Skill.Info.fields.path.make(join(ctx.location.directory, ".opencode/skills/dotbot-macos-operator/SKILL.md")),
+        path: Skill.Info.fields.path.make(join(ctx.location.directory, ".opencode/skills/bot-macos-operator/SKILL.md")),
         content: OPERATOR_SKILL_CONTENT,
       })
     })
 
     // 6. Slash Commands (available across OpenCode Web, Mobile Beta, Desktop, and TUI)
     const cmdReg = await ctx.command.transform((editor) => {
-      registerDotBotCommands(editor, {
+      registerBotCommands(editor, {
         options,
         awake,
         browser,
@@ -281,7 +281,7 @@ export default Plugin.define({
 
     // 7. Server-side Computer Use, Takeover & Routine Tools
     const toolReg = await ctx.tool.transform((editor) => {
-      registerDotBotTools(editor, {
+      registerBotTools(editor, {
         options,
         isMac,
         awake,

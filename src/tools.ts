@@ -1,5 +1,5 @@
 import type { ToolEditor, ToolContext } from "@opencode/plugin/promise/tool"
-import type { DotBotOptions } from "./options.ts"
+import type { BotOptions } from "./options.ts"
 import { captureScreenJpeg, runAgentDesktop } from "./macos/desktop.ts"
 import type { KeepAwakeController } from "./macos/awake.ts"
 import type { MacBrowserController } from "./macos/browser.ts"
@@ -7,13 +7,13 @@ import type { WebTakeoverConsole } from "./takeover/web-console.ts"
 import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
 import { parseDailyAt } from "./routines/scheduler.ts"
-import { collectDotBotStatus } from "./status.ts"
+import { collectBotStatus } from "./status.ts"
 import { buildDesktopArgs, buildBrowserArgs } from "./args-builder.ts"
 
-export function registerDotBotTools(
+export function registerBotTools(
   editor: ToolEditor,
   context: {
-    options: DotBotOptions
+    options: BotOptions
     isMac: boolean
     awake: KeepAwakeController
     takeovers: TakeoverManager
@@ -45,7 +45,7 @@ export function registerDotBotTools(
     },
     execute: async (rawInput: any, toolCtx: ToolContext) => {
       const input = (rawInput ?? {}) as { includeWindows?: boolean }
-      const summary = await collectDotBotStatus({
+      const summary = await collectBotStatus({
         awake,
         browser,
         webConsole,
@@ -180,7 +180,7 @@ export function registerDotBotTools(
           sessionID: toolCtx.sessionID,
           agent: toolCtx.agent,
           source: { type: "tool", messageID: toolCtx.messageID, id: toolCtx.id },
-          action: needsHeaded ? "dotbot.desktop.headed" : "dotbot.desktop.act",
+          action: needsHeaded ? "bot.desktop.headed" : "bot.desktop.act",
           resources: [targetResource],
           save: [targetResource],
           metadata: {
@@ -241,7 +241,7 @@ export function registerDotBotTools(
           sessionID: toolCtx.sessionID,
           agent: toolCtx.agent,
           source: { type: "tool", messageID: toolCtx.messageID, id: toolCtx.id },
-          action: "dotbot.browser.act",
+          action: "bot.browser.act",
           resources: [resource],
           save: [resource],
           metadata: { browserAction: input.action, target: input.target, value: input.value },
@@ -315,7 +315,7 @@ export function registerDotBotTools(
   editor.add({
     name: "routine",
     description:
-      "Create, list, enable/disable, run immediately, or delete 24/7 background routines (GPT Dots / Grok Bot style persistent tasks that keep running on the Mac server when clients disconnect).",
+      "Create, list, enable/disable, run immediately, or delete 24/7 background routines (persistent tasks that keep running on the Mac server even after clients disconnect).",
     options: { namespace: "computer", codemode: false },
     input: {
       type: "object",

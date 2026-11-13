@@ -1,8 +1,8 @@
 import { Rpc } from "@opencode/plugin/rpc"
 import { REMOTE_INPUT_KINDS } from "./input-types.ts"
 
-export const DotBotRpc = Rpc.define({
-  id: "dotbot",
+export const BotRpc = Rpc.define({
+  id: "bot",
   methods: {
     status: {
       input: { type: "object", additionalProperties: false },

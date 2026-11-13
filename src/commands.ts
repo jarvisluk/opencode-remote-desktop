@@ -1,16 +1,16 @@
 import type { CommandEditor, CommandInvocation } from "@opencode/plugin/promise/command"
-import type { DotBotOptions } from "./options.ts"
+import type { BotOptions } from "./options.ts"
 import type { KeepAwakeController } from "./macos/awake.ts"
 import type { MacBrowserController } from "./macos/browser.ts"
 import type { WebTakeoverConsole } from "./takeover/web-console.ts"
 import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
-import { collectDotBotStatus } from "./status.ts"
+import { collectBotStatus } from "./status.ts"
 
-export function registerDotBotCommands(
+export function registerBotCommands(
   editor: CommandEditor,
   context: {
-    options: DotBotOptions
+    options: BotOptions
     awake: KeepAwakeController
     browser: MacBrowserController
     webConsole: WebTakeoverConsole
@@ -23,10 +23,10 @@ export function registerDotBotCommands(
   const { options, awake, browser, webConsole, takeovers, routines, syntheticSessionMessage, promptSession } = context
 
   editor.add({
-    name: "dotbot",
+    name: "bot",
     description: "查看 Mac 宿主机状态、无障碍/录屏权限及远程实时画面控制台链接",
     execute: async ({ sessionID }: CommandInvocation) => {
-      const summary = await collectDotBotStatus({
+      const summary = await collectBotStatus({
         awake,
         browser,
         webConsole,
@@ -36,7 +36,7 @@ export function registerDotBotCommands(
       })
       const { desktop, keepAwakeActive, browserMode, consoleUrls, routines: routineList } = summary
       const lines = [
-        `### DotBot macOS 宿主机状态`,
+        `### Bot macOS 宿主机状态`,
         `- **平台**: \`${desktop.platform}\` (${desktop.supported ? "已启用" : "当前仅支持 macOS"})`,
         `- **辅助功能权限 (Accessibility)**: \`${desktop.accessibility}\``,
         `- **屏幕录制权限 (Screen Recording)**: \`${desktop.screenRecording}\``,

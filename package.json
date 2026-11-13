@@ -1,7 +1,7 @@
 {
-  "name": "opencode-dotbot",
+  "name": "opencode-bot",
   "version": "0.1.0",
-  "description": "GPT Dots & Grok Bot capabilities for OpenCode Server: macOS desktop/browser control, remote Web human takeover, and 24/7 background routines.",
+  "description": "An always-on macOS host for OpenCode Server: real desktop & signed-in browser control, live Web human takeover, and 24/7 background routines.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

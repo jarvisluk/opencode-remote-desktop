@@ -53,7 +53,7 @@ export interface CapturedFrame {
 }
 
 function getTempCaptureDir(): string {
-  return join(tmpdir(), "opencode-dotbot-captures")
+  return join(tmpdir(), "opencode-bot-captures")
 }
 
 function parseJsonSafe(raw: string): any {

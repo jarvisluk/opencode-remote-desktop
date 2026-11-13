@@ -2,8 +2,8 @@
 // `opencode serve` that loads only this checkout as a plugin. The server hot-reloads src/*.ts
 // and dist/gui-experimental.cjs by itself; reload the browser tab to pick up GUI changes.
 //
-//   npm run dev                      http://127.0.0.1:49390  (user opencode / password dotbot-dev)
-//   DOTBOT_DEV_PORT=49391 npm run dev
+//   npm run dev                      http://127.0.0.1:49390  (user opencode / password bot-dev)
+//   BOT_DEV_PORT=49391 npm run dev
 //   OPENCODE_BIN=/path/to/opencode-cli npm run dev
 import { spawn, execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, watch, writeFileSync } from "node:fs"
@@ -14,8 +14,8 @@ import esbuild from "esbuild"
 import { guiBuildOptions } from "./build-gui.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const port = process.env.DOTBOT_DEV_PORT ?? "49390"
-const password = process.env.OPENCODE_SERVER_PASSWORD ?? "dotbot-dev"
+const port = process.env.BOT_DEV_PORT ?? "49390"
+const password = process.env.OPENCODE_SERVER_PASSWORD ?? "bot-dev"
 
 function findOpencode() {
   if (process.env.OPENCODE_BIN) return process.env.OPENCODE_BIN
@@ -30,7 +30,7 @@ function findOpencode() {
 
 // Plugin set comes from this private config dir; the global config is still merged by OpenCode,
 // so the dev port must differ from the service port (49374) and its plugin instances.
-const configDir = path.join(root, ".dotbot-tmp/devcfg")
+const configDir = path.join(root, ".bot-tmp/devcfg")
 mkdirSync(configDir, { recursive: true })
 writeFileSync(path.join(configDir, "opencode.json"), JSON.stringify({ plugins: [root] }, null, 2))
 

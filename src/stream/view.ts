@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
-import { DotBotRpc } from "../rpc.ts"
+import { BotRpc } from "../rpc.ts"
 
 /**
  * WebRTC live view: H.264 video track + "input" DataChannel. Signaling goes through the
@@ -22,7 +22,7 @@ export function LiveStreamView(props: { session: any; onUnavailable: (reason: st
   let disposed = false
   let lastMove = 0
 
-  const rpc = () => props.session?.server?.client?.rpc(DotBotRpc)
+  const rpc = () => props.session?.server?.client?.rpc(BotRpc)
 
   const giveUp = (reason: string) => {
     if (disposed) return

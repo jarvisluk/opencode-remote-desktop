@@ -6,7 +6,7 @@ import type { WebTakeoverConsole } from "./takeover/web-console.ts"
 import type { TakeoverManager, PendingTakeover } from "./takeover/manager.ts"
 import type { RoutineScheduler, RoutineRecord } from "./routines/scheduler.ts"
 
-export interface DotBotStatusSummary {
+export interface BotStatusSummary {
   desktop: MacDesktopStatus
   keepAwakeActive: boolean
   browserMode: string
@@ -16,7 +16,7 @@ export interface DotBotStatusSummary {
   windows?: readonly MacWindowInfo[]
 }
 
-export async function collectDotBotStatus(params: {
+export async function collectBotStatus(params: {
   awake: KeepAwakeController
   browser: MacBrowserController
   webConsole: WebTakeoverConsole
@@ -25,7 +25,7 @@ export async function collectDotBotStatus(params: {
   sessionID?: string
   includeWindows?: boolean
   signal?: AbortSignal
-}): Promise<DotBotStatusSummary> {
+}): Promise<BotStatusSummary> {
   const { awake, browser, webConsole, takeovers, routines, sessionID, includeWindows, signal } = params
   const [desktop, routineList, windows] = await Promise.all([
     getMacDesktopStatus(signal),

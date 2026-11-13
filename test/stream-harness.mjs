@@ -1,5 +1,5 @@
 // Manual end-to-end harness: node test/stream-harness.mjs, then open http://127.0.0.1:8787
-// Bridges a browser page to the dotbot-stream sidecar without OpenCode in the loop.
+// Bridges a browser page to the bot-stream sidecar without OpenCode in the loop.
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
 import { createInterface } from "node:readline"
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 
 const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/bin")
 const tag = `${process.platform}-${process.arch}`
-const sidecar = spawn(path.join(bin, `dotbot-stream-${tag}`), ["--capture", path.join(bin, `dotbot-capture-${tag}`)], {
+const sidecar = spawn(path.join(bin, `bot-stream-${tag}`), ["--capture", path.join(bin, `bot-capture-${tag}`)], {
   stdio: ["pipe", "pipe", "inherit"],
 })
 const pending = new Map()

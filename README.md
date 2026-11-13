@@ -1,8 +1,8 @@
-# OpenCode DotBot (macOS & Remote Web)
+# OpenCode Bot (macOS & Remote Web)
 
-让 OpenCode 拥有类似 **GPT Dots** (OpenAI) 与 **Grok Bot** (xAI) 的专属电脑操作与云端远程接管能力。
+让 OpenCode 拥有一台**永远在线、AI 可驾驶、人可随时接管的真实 Mac 主机**。
 
-当 OpenCode 以服务端形式运行在远程 macOS 机器（如 Mac mini、Mac Studio、MacBook）上时，用户通过浏览器 Web 客户端即可随时让 Agent 操控该电脑执行复杂多步骤任务，并在关键时刻（2FA 验证码、扫码登录、人脸识别、支付密码）随时通过 Web 接管控制台直接接管画面与键盘鼠标，完成后一键恢复 AI 执行。
+当 OpenCode 以服务端形式运行在你的 macOS 机器（Mac mini、Mac Studio、MacBook）上时，Agent 直接操控这台**你自己的电脑**：复用本机已登录的浏览器与账号，通过原生无障碍树操作真实桌面应用；即使客户端断开，仍可在后台 7×24 常驻执行例行任务。遇到关键时刻（2FA 验证码、扫码登录、人脸识别、支付密码），AI 主动挂起并通过 Web 控制台把画面与键鼠**交还给你**，完成后一键恢复 AI 继续执行。
 
 ---
 
@@ -26,7 +26,7 @@
    - 内置例行任务调度器（Routine Scheduler），支持 Cron 风格定时表达式与间隔周期，自动向 OpenCode 派发定时自动化会话。
 
 5. **全端多通道 RPC 支持 (Cross-Network RPC)**
-   - 实现了完整的 OpenCode RPC 契约定义（`DotBotRpc`），Web 客户端以及未来的 OpenCode 移动端 / 桌面端均可通过统一协议接收屏幕流、下发指令与处理接管事件。
+   - 实现了完整的 OpenCode RPC 契约定义（`BotRpc`），Web 客户端以及未来的 OpenCode 移动端 / 桌面端均可通过统一协议接收屏幕流、下发指令与处理接管事件。
 
 ---
 
@@ -42,7 +42,7 @@
 │          OpenCode Server (macOS Host Machine)          │
 │                                                        │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ opencode-dotbot Plugin                           │  │
+│  │ opencode-bot Plugin                              │  │
 │  │  - TakeoverManager (挂起/恢复状态机)             │  │
 │  │  - WebTakeoverConsole (轻量内嵌 Web 接管服务)    │  │
 │  │  - RoutineScheduler (全天候后台定时器)           │  │
@@ -81,7 +81,7 @@
 
 ### 斜杠命令 (Slash Commands)
 - `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。
-- `/dotbot`: 查看 DotBot 状态与 Web 控制台入口。
+- `/bot`: 查看 Bot 状态与 Web 控制台入口。
 - `/takeover`: 手动挂起会话并请求人类接管。
 - `/routine`: 列出或管理例行任务。
 
@@ -101,7 +101,7 @@ agent-desktop check
 ```json
 {
   "plugins": [
-    "/Users/zippy/codespace/opencode-dotbot"
+    "/Users/zippy/codespace/opencode-bot"
   ]
 }
 ```
@@ -111,7 +111,7 @@ agent-desktop check
 {
   "plugins": [
     {
-      "source": "/Users/zippy/codespace/opencode-dotbot",
+      "source": "/Users/zippy/codespace/opencode-bot",
       "options": {
         "consolePort": 49375,
         "keepAwake": "active",
@@ -129,6 +129,6 @@ agent-desktop check
 ## 🧪 自动化测试 (Testing)
 
 ```bash
-cd /Users/zippy/codespace/opencode-dotbot
+cd /Users/zippy/codespace/opencode-bot
 node --test test/core.test.ts
 ```
