@@ -2,6 +2,8 @@ export type KeepAwakeMode = "off" | "active" | "always"
 export type StreamBackendPreference = "auto" | "native" | "ffmpeg"
 
 export interface BotOptions {
+  /** Expose this machine as a controllable host. Set false on a controller machine that only needs the Live Screen sidebar. Default: true. */
+  readonly host: boolean
   /** Bind address for the Web/Mobile Takeover Console. Default: "0.0.0.0" (reachable via LAN/Tailscale with token). */
   readonly consoleHost: string
   /** Port for the Web/Mobile Takeover Console. Set 0 for OS-assigned port. Default: 49375. */
@@ -63,6 +65,7 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
     : 30_000
 
   return {
+    host: opts.host !== false,
     consoleHost: typeof opts.consoleHost === "string" && opts.consoleHost.trim() ? opts.consoleHost.trim() : "0.0.0.0",
     consolePort: port,
     consoleEnabled: opts.consoleEnabled !== false,

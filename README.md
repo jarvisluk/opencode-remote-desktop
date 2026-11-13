@@ -65,6 +65,10 @@
 - **实时屏幕侧边栏 (Live Screen Tab)**:
   - 侧边栏支持直接打开 Live Screen Tab（`region: "side"`）。
   - 仅在 App 连接远端服务（如 OpenTunnel、局域网/Tailscale 地址）时出现；连本机服务时面板、`+` 菜单项和 `/screen` 都会隐藏。
+  - OpenCode Desktop 只加载**本机**服务上插件的界面，所以控制端也要装本插件，并设 `"host": false`：只提供侧边栏，不注册 `computer_*` 工具、不开接管控制台：
+    ```json
+    "plugins": [{ "package": "/path/to/opencode-bot", "options": { "host": false } }]
+    ```
   - 支持快捷键 `Cmd+Shift+S` 或输入 `/screen` 或点击侧边栏 `+` 菜单快速呼出。
   - 直接在 OpenCode 内实时观看远端 macOS 桌面（1~4 FPS 动态可调，150ms 超低延迟）。
   - **直接远程操作**：支持鼠标点击（Click）、双击（Double Click）、右键菜单（Right Click）、滚轮滑动（Scroll）。

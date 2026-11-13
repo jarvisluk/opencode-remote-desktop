@@ -68,6 +68,9 @@ export default Plugin.define({
   id: "bot",
   async setup(ctx) {
     const options = resolveOptions(ctx.options as Record<string, unknown> | undefined)
+    // Desktop only loads GUI parts of plugins on its own server, so a controller must load the
+    // plugin too; with host: false it serves the sidebar without exposing this machine.
+    if (!options.host) return async () => {}
     const isMac = process.platform === "darwin"
 
     const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
