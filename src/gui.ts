@@ -49,7 +49,8 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
   const ui = props.ui
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal(true)
-  const [fps, setFps] = createSignal(2) // default 2 fps for smooth low-overhead live preview
+  // Measured frames per second; screenshot polling runs as fast as each round trip allows.
+  const [fps, setFps] = createSignal(0)
   const [rtt, setRtt] = createSignal(0)
   const [error, setError] = createSignal("")
   const [selectedWindowId, setSelectedWindowId] = createSignal("")
@@ -63,6 +64,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
   let imageRef: HTMLImageElement | null = null
   let rootRef: HTMLDivElement | undefined
   let isRequestInProgress = false
+  let lastFrameAt = 0
 
   const getClientRpc = () => {
     try {
@@ -92,8 +94,11 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
     try {
       const res = await rpc.frame({ windowId: selectedWindowId() || undefined })
       if (res?.jpegBase64) {
+        const now = Date.now()
+        if (lastFrameAt) setFps(Math.round(10_000 / (now - lastFrameAt)) / 10)
+        lastFrameAt = now
         setFrame(res as LiveFrameState)
-        setRtt(Date.now() - startTime)
+        setRtt(now - startTime)
         setError("")
       }
     } catch (err: any) {
@@ -198,8 +203,17 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
 
   createEffect(() => {
     if (!streaming()) return
-    const timer = setInterval(() => void fetchNextFrame(), Math.max(150, Math.round(1000 / fps())))
-    onCleanup(() => clearInterval(timer))
+    // Each frame is a full screenshot round trip over RPC, so poll back-to-back instead of at a fixed rate.
+    let stop = false
+    lastFrameAt = 0
+    const loop = async () => {
+      while (!stop) {
+        await fetchNextFrame()
+        await new Promise((r) => setTimeout(r, 150))
+      }
+    }
+    void loop()
+    onCleanup(() => { stop = true })
   })
 
   const server = () => props.session?.server
@@ -274,13 +288,6 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
           placement: "top-end",
         }),
         iconButton(ui, { icon: "outline-rotate-clockwise", label: "刷新窗口列表", onClick: (_e) => void refreshWindows() }),
-        h(ui.Select, {
-          label: "帧率",
-          options: () => [{ value: "1", label: "1 fps" }, { value: "2", label: "2 fps" }, { value: "4", label: "4 fps" }],
-          value: () => String(fps()),
-          onChange: (value: string) => setFps(Number(value)),
-          placement: "top-end",
-        }),
         iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
         iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
         iconButton(ui, { icon: "expand", label: "铺满窗口（⌃⌘F 全屏）", onClick: (_e) => fill.toggle(), pressed: fill.on }),

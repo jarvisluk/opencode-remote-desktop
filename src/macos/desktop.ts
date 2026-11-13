@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process"
 import { mkdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -399,6 +400,17 @@ export async function runAgentDesktop(
   }
 }
 
+function pbcopy(text: string): Promise<{ readonly ok: boolean; readonly detail?: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn("/usr/bin/pbcopy", [], { stdio: ["pipe", "ignore", "pipe"] })
+    let stderr = ""
+    proc.stderr.on("data", (d) => { stderr += d })
+    proc.on("error", (err) => resolve({ ok: false, detail: err.message }))
+    proc.on("close", (code) => resolve({ ok: code === 0, detail: stderr.trim() || undefined }))
+    proc.stdin.end(text)
+  })
+}
+
 function formatCoordPair(x: number, y: number): string {
   return `--xy=${Math.round(x)},${Math.round(y)}`
 }
@@ -452,22 +464,24 @@ export async function injectRemoteInput(
     const text = input.text ?? ""
     if (!text) return { ok: false, detail: "Empty text" }
 
-    // First try agent-desktop type directly (avoids touching clipboard and losing images/files or leaking secrets)
-    const typeArgs = ["type"]
-    if (input.app) typeArgs.push("--app", input.app)
-    typeArgs.push(text)
-    const directType = await runAgentDesktop(typeArgs, { headed: true, timeoutMs: 8_000, signal })
-    if (directType.ok) {
-      return { ok: true, detail: `Typed ${text.length} chars` }
+    // Single letters and digits are plain key presses, which keeps the clipboard untouched. agent-desktop's own
+    // `type` needs an element ref and cannot target "whatever has focus".
+    if (/^[a-z0-9]$/i.test(text)) {
+      const key = text === text.toUpperCase() && text !== text.toLowerCase() ? `shift+${text.toLowerCase()}` : text
+      const pressArgs = ["press"]
+      if (input.app) pressArgs.push("--app", input.app)
+      pressArgs.push(key)
+      const res = await runAgentDesktop(pressArgs, { headed: true, timeoutMs: 8_000, signal })
+      return { ok: res.ok, detail: res.ok ? "Typed 1 char" : res.raw }
     }
 
-    // Fallback: paste text into focused field via Cmd+V
-    const prevClip = await runAgentDesktop(["clipboard-get"], { timeoutMs: 4_000, signal })
-    const previousText = typeof prevClip.parsed?.data?.text === "string" ? prevClip.parsed.data.text : null
+    // Everything else (symbols, CJK, longer text) is pasted with Cmd+V through the system clipboard.
+    const prevClip = await runCommand("/usr/bin/pbpaste", [], { timeoutMs: 4_000, signal })
+    const previousText = prevClip.code === 0 && prevClip.stdout ? prevClip.stdout : null
 
-    const setRes = await runAgentDesktop(["clipboard-set", text], { timeoutMs: 4_000, signal })
+    const setRes = await pbcopy(text)
     if (!setRes.ok) {
-      return { ok: false, detail: setRes.raw }
+      return { ok: false, detail: setRes.detail }
     }
 
     const pasteArgs = ["press"]
@@ -478,7 +492,7 @@ export async function injectRemoteInput(
     await new Promise((r) => setTimeout(r, 140))
     // Only restore clipboard text if previousText was indeed string; NEVER call clipboard-clear which wipes images/files
     if (previousText !== null) {
-      await runAgentDesktop(["clipboard-set", previousText], { timeoutMs: 4_000 }).catch(() => {})
+      await pbcopy(previousText).catch(() => {})
     }
 
     return { ok: pasteRes.ok, detail: pasteRes.ok ? `Typed ${text.length} chars (clipboard fallback)` : pasteRes.raw }

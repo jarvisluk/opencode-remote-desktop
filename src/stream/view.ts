@@ -85,10 +85,27 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
 
   const rpc = () => props.session?.server?.client?.rpc(BotRpc)
 
+  // ICE between two machines occasionally fails once (e.g. proxy TUN adapters, a sleeping NIC), so retry before
+  // dropping to screenshot polling.
+  const MAX_ATTEMPTS = 3
+  let attempt = 0
+
   const giveUp = (reason: string) => {
     if (disposed) return
     teardown()
     props.onUnavailable(reason)
+  }
+
+  const retryOrGiveUp = (reason: string) => {
+    if (disposed) return
+    if (attempt >= MAX_ATTEMPTS) return giveUp(reason)
+    clearInterval(statsTimer)
+    pc?.close()
+    if (session) void rpc()?.streamClose({ session }).catch(() => {})
+    session = undefined
+    setConnected(false)
+    setStatus("reconnecting")
+    setTimeout(() => void connect().catch((err) => giveUp(err?.message ?? String(err))), 1000)
   }
 
   const teardown = () => {
@@ -100,52 +117,57 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   }
 
   const connect = async () => {
+    if (disposed) return
     const client = rpc()
     if (!client) return giveUp("server disconnected")
     if (typeof RTCPeerConnection === "undefined") return giveUp("WebRTC unsupported")
 
+    const mine = ++attempt
+    const current = () => !disposed && mine === attempt
     const started = performance.now()
     pc = new RTCPeerConnection()
-    pc.addTransceiver("video", { direction: "recvonly" })
-    dc = pc.createDataChannel("input", { ordered: true })
-    pc.ontrack = (e) => {
+    const peer = pc
+    peer.addTransceiver("video", { direction: "recvonly" })
+    dc = peer.createDataChannel("input", { ordered: true })
+    peer.ontrack = (e) => {
       if (video) {
         video.srcObject = e.streams[0] ?? new MediaStream([e.track])
         void video.play().catch(() => {})
       }
     }
-    pc.onconnectionstatechange = () => {
-      const s = pc!.connectionState
+    peer.onconnectionstatechange = () => {
+      if (!current()) return
+      const s = peer.connectionState
       if (s === "connected") {
         setConnected(true)
         setConnectMs(Math.round(performance.now() - started))
         setStatus("live")
       } else if (s === "failed") {
-        giveUp("WebRTC connection failed (no direct route)")
+        retryOrGiveUp(`WebRTC connection failed after ${MAX_ATTEMPTS} attempts (no direct route)`)
       } else if (s === "disconnected") {
         setStatus("reconnecting")
       }
     }
 
-    await pc.setLocalDescription(await pc.createOffer())
+    await peer.setLocalDescription(await peer.createOffer())
     // Non-trickle: wait briefly for local candidates so one RPC round trip is enough.
     await new Promise<void>((resolve) => {
-      if (pc!.iceGatheringState === "complete") return resolve()
-      const done = () => pc!.iceGatheringState === "complete" && resolve()
-      pc!.addEventListener("icegatheringstatechange", done)
+      if (peer.iceGatheringState === "complete") return resolve()
+      const done = () => peer.iceGatheringState === "complete" && resolve()
+      peer.addEventListener("icegatheringstatechange", done)
       setTimeout(resolve, 2000)
     })
-    if (disposed) return
+    if (!current()) return
 
     try {
-      const answer = await client.streamOffer({ sdp: pc.localDescription!.sdp })
+      const answer = await client.streamOffer({ sdp: peer.localDescription!.sdp })
       session = answer.session
-      await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp })
+      await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp })
     } catch (err: any) {
       return giveUp(err?.message ?? "signaling failed")
     }
 
-    setTimeout(() => !connected() && giveUp("WebRTC connect timeout"), 10_000)
+    setTimeout(() => current() && !connected() && retryOrGiveUp("WebRTC connect timeout"), 10_000)
 
     let lastBytes = 0
     let lastFrames = 0
@@ -295,8 +317,8 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
 
   const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.route === "TURN 中继" ? "warning" : "success")
   const summary = () => {
-    if (!connected()) return "WebRTC 连接中"
     if (status() === "reconnecting") return "WebRTC 重连中"
+    if (!connected()) return "WebRTC 连接中"
     const s = link()
     return s ? `WebRTC · ${s.route} · ${s.fps ? `${s.fps} fps` : "画面静止"} · ${s.rtt} ms` : "WebRTC"
   }

@@ -120,8 +120,8 @@ export function takeoverCard(ui: Ui, reason: () => string, resume: () => void): 
   ]) as unknown as JSX.Element
 }
 
-// Height of the window controls (macOS traffic lights, Windows caption buttons) drawn over a frameless window.
-const WINDOW_CONTROLS = "40px"
+// Height of OpenCode's own title strip (8px top inset + 48px traffic-light row, measured in the 2.3.0 shell).
+const WINDOW_CONTROLS = "56px"
 
 const screenFull = () => window.outerWidth >= screen.width && window.outerHeight >= screen.height
 
@@ -150,7 +150,8 @@ export function windowFill(el: () => HTMLElement | undefined) {
     if (!n || mark) return
     mark = document.createComment("bot-live-screen")
     n.replaceWith(mark)
-    Object.assign(n.style, { position: "fixed", inset: "0", zIndex: "40" })
+    // no-drag: the app's title strip underneath is a window drag region, which would swallow clicks on the picture.
+    Object.assign(n.style, { position: "fixed", inset: "0", zIndex: "40", webkitAppRegion: "no-drag" })
     document.body.appendChild(n)
     setOn(true)
     inset()
@@ -159,7 +160,7 @@ export function windowFill(el: () => HTMLElement | undefined) {
   const exit = () => {
     const n = el()
     if (!n || !mark) return
-    Object.assign(n.style, { position: "relative", inset: "", zIndex: "" })
+    Object.assign(n.style, { position: "relative", inset: "", zIndex: "", webkitAppRegion: "" })
     mark.replaceWith(n)
     mark = null
     setOn(false)
