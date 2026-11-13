@@ -56,10 +56,12 @@ export function containsHighRiskIntent(values: readonly string[]): string | null
 
 const OPERATOR_SKILL_CONTENT = `# Bot macOS Operator Guide
 
-You have access to \`computer_*\` tools that directly control the **macOS server** hosting OpenCode.
-Use \`computer_screenshot\` to inspect what's on screen, \`computer_desktop\` to interact via accessibility tree,
-\`computer_browser\` to automate the signed-in desktop browser, and \`computer_request_takeover\` when you need the human user
-to log in with QR code, 2FA, Passkey, or solve a CAPTCHA.
+You have access to fallback \`computer_*\` tools that wrap \`agent-desktop\` / \`agent-browser\` on the **macOS server** hosting OpenCode.
+
+## Tool Priority Rules
+- **Lower priority than dedicated tools / skills**: When native browser tools (\`browser\`, \`browse\`), MCP browser/desktop servers, or dedicated skills (\`agent-desktop\`, \`agent-browser\`) are available, **prefer those first**.
+- Only use \`computer_desktop\` / \`computer_browser\` when dedicated tools cannot reach the remote host or when explicitly requested.
+- Use \`computer_screenshot\` for host screen capture, \`computer_request_takeover\` when human intervention (QR login, 2FA, Passkey, CAPTCHA) is needed on the remote screen, and \`computer_routine\` for 24/7 host routines.
 
 Keep actions safe, concise, and confirm after mutations.
 `
@@ -264,7 +266,7 @@ export default Plugin.define({
       const consoleState = options.consoleEnabled ? "Web Console available (run /bot to get access link)" : "Web Console disabled"
       event.system.push({
         type: "text",
-        text: `[Bot macOS Host Active] You can operate this Mac mini's desktop GUI (\`computer_desktop\`), signed-in browser (\`computer_browser\`), screenshots (\`computer_screenshot\`), 24/7 routines (\`computer_routine\`), and human takeover (\`computer_request_takeover\`). ${consoleState}`,
+        text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. ${consoleState}`,
       } as any)
     })
 
@@ -274,7 +276,7 @@ export default Plugin.define({
         id: Skill.ID.make("bot-macos-operator"),
         name: Skill.Name.make("Bot macOS Operator"),
         description:
-          "Operate the macOS host desktop GUI, signed-in browser, screenshots, human takeover (2FA, QR login, Passkey), and 24/7 background routines.",
+          "Fallback operator guide for the remote macOS host (Web Console human takeover, 24/7 background routines, and fallback `computer_*` wrappers when primary `agent-desktop` / `agent-browser` / browser tools are not applicable).",
         path: Skill.Info.fields.path.make(join(ctx.location.directory, ".opencode/skills/bot-macos-operator/SKILL.md")),
         content: OPERATOR_SKILL_CONTENT,
       })

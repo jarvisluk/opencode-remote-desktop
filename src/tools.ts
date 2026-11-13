@@ -28,14 +28,14 @@ export function registerBotTools(
   editor.namespace({
     name: "computer",
     description:
-      "Operate the macOS host computer running OpenCode Server (accessibility desktop GUI, signed-in browser, screenshots, remote Web takeover, and 24/7 routines).",
+      "Low-priority fallback wrappers for the macOS host running OpenCode Server (remote Web takeover, 24/7 routines, screenshots, and fallback wrappers around `agent-desktop` / `agent-browser`). Prefer dedicated browser/desktop tools or `agent-desktop` / `agent-browser` skills first.",
   })
 
   editor.add({
     name: "status",
     description:
       "Check macOS host readiness, TCC permissions (Accessibility & Screen Recording), displays, running windows, signed-in browser connection, and remote Web Console URLs.",
-    options: { namespace: "computer", codemode: false },
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
@@ -77,7 +77,7 @@ export function registerBotTools(
     name: "screenshot",
     description:
       "Capture a JPEG screenshot of the macOS primary display or a specific application/window, returning both logical coordinates and the inline image to OpenCode Web.",
-    options: { namespace: "computer", codemode: false },
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
@@ -122,8 +122,8 @@ export function registerBotTools(
   editor.add({
     name: "desktop",
     description:
-      "Observe and control macOS desktop GUI apps via native Accessibility Tree (`agent-desktop`) or headed coordinate fallback.",
-    options: { namespace: "computer", codemode: false },
+      "Fallback wrapper around `agent-desktop` for macOS desktop GUI apps. Low priority: prefer the dedicated `agent-desktop` skill or native desktop tools when available.",
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
@@ -207,8 +207,8 @@ export function registerBotTools(
   editor.add({
     name: "browser",
     description:
-      "Operate the macOS host's browser via `agent-browser` (automatically reuses signed-in Microsoft Edge / Chrome via CDP when available).",
-    options: { namespace: "computer", codemode: false },
+      "Fallback wrapper around `agent-browser` on the macOS host. Low priority: prefer built-in `browser` / `browse` tools or the `agent-browser` skill first.",
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
@@ -263,7 +263,7 @@ export function registerBotTools(
     name: "request_takeover",
     description:
       "Pause automation and ask the human user to take over the remote macOS screen for 2FA, QR login, Passkey, CAPTCHA, or payment confirmation. Resumes automatically when the user finishes in the Web Console or replies in chat.",
-    options: { namespace: "computer", codemode: false },
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
@@ -316,7 +316,7 @@ export function registerBotTools(
     name: "routine",
     description:
       "Create, list, enable/disable, run immediately, or delete 24/7 background routines (persistent tasks that keep running on the Mac server even after clients disconnect).",
-    options: { namespace: "computer", codemode: false },
+    options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
