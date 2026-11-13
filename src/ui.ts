@@ -42,6 +42,7 @@ export function floating(corner: Corner, extra: JSX.CSSProperties = {}): JSX.CSS
     "font-family": T.sans,
     "font-size": T.small,
     "z-index": "1",
+    ...extra,
   }
 }
 
@@ -66,7 +67,7 @@ export function iconButton(ui: Ui, p: { icon: IconName; label: string; onClick: 
       icon: p.icon,
       label: p.label,
       variant: "ghost-muted",
-      size: "small",
+      size: "large",
       onClick: p.onClick,
       ...(p.pressed ? { pressed: p.pressed } : {}),
     }),

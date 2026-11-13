@@ -301,7 +301,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     if (!connected()) return "WebRTC 连接中"
     if (status() === "reconnecting") return "WebRTC 重连中"
     const s = link()
-    return s ? `WebRTC · ${s.route} · ${s.fps} fps · ${s.rtt} ms` : "WebRTC"
+    return s ? `WebRTC · ${s.route} · ${s.fps ? `${s.fps} fps` : "画面静止"} · ${s.rtt} ms` : "WebRTC"
   }
 
   const videoStyle = () => {
