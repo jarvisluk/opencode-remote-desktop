@@ -6,8 +6,7 @@ import type { WebTakeoverConsole } from "./takeover/web-console.ts"
 import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
-import { collectDiagnostics, formatDoctorReport } from "./diagnostics.ts"
-import { collectPreflightIssues, formatPreflightIssues } from "./preflight.ts"
+import { collectDiagnostics, formatDoctorReport, startupWarnings } from "./diagnostics.ts"
 
 export function registerBotCommands(
   editor: CommandEditor,
@@ -37,7 +36,7 @@ export function registerBotCommands(
         sessionID,
       })
       const { desktop, keepAwakeActive, browserMode, consoleUrls, routines: routineList } = summary
-      const preflightIssues = await collectPreflightIssues()
+      const healthWarnings = startupWarnings(await collectDiagnostics())
       const lines = [
         `### Bot macOS 宿主机状态`,
         `- **平台**: \`${desktop.platform}\` (${desktop.supported ? "已启用" : "当前仅支持 macOS"})`,
@@ -50,9 +49,9 @@ export function registerBotCommands(
         consoleUrls.length > 0
           ? `- **Web / 手机端实时远程桌面链接**（含免密安全令牌）:\n${consoleUrls.map((u) => `  - ${u}`).join("\n")}`
           : `- **Web 控制台**: 未启用`,
-        preflightIssues.length > 0
-          ? `\n### ⚠️ 组件体检（${preflightIssues.length} 项待修复）\n${formatPreflightIssues(preflightIssues)}`
-          : `\n### ✅ 组件体检\n全部依赖就绪（agent-desktop / agent-browser / 权限 / 直播 sidecar）。`,
+        healthWarnings.length > 0
+          ? `- **组件体检**: ⚠️ ${healthWarnings.length} 项待修复 — 运行 \`/doctor\` 查看详情与修复建议`
+          : `- **组件体检**: ✅ 全部依赖就绪`,
       ]
       await syntheticSessionMessage(sessionID, lines.join("\n"))
     },
@@ -74,17 +73,7 @@ export function registerBotCommands(
         }),
       ])
       const lines = [formatDoctorReport(report)]
-      lines.push(`- **辅助功能权限 (Accessibility)**: \`${summary.desktop.accessibility}\``)
-      lines.push(`- **屏幕录制权限 (Screen Recording)**: \`${summary.desktop.screenRecording}\``)
       lines.push(`- **浏览器模式**: \`${summary.browserMode}\``)
-      if (summary.desktop.accessibility !== "granted") {
-        lines.push(
-          "  - 修复: 系统设置 → 隐私与安全性 → 辅助功能，勾选宿主机终端；或运行 `agent-desktop permissions --guide` 按引导授权。",
-        )
-      }
-      if (summary.desktop.screenRecording !== "granted") {
-        lines.push("  - 修复: 系统设置 → 隐私与安全性 → 屏幕录制，勾选宿主机终端后重启会话。")
-      }
       await syntheticSessionMessage(sessionID, lines.join("\n"))
     },
   })

@@ -1,4 +1,5 @@
 import { resolveBinary, runCommand } from "./macos/exec.ts"
+import { getMacDesktopStatus } from "./macos/desktop.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 
 /**
@@ -11,9 +12,14 @@ export const MIN_AGENT_BROWSER_VERSION = "0.41.1"
 
 /** Official install commands (verified against vercel-labs READMEs, 2026-11). */
 export const AGENT_DESKTOP_INSTALL_HINT =
-  "npm install -g agent-desktop (or: brew install agent-desktop), then grant Accessibility & Screen Recording"
+  "npm install -g agent-desktop (or: brew install agent-desktop), then `agent-desktop permissions --guide` 授予辅助功能与录屏权限"
 export const AGENT_BROWSER_INSTALL_HINT =
   "npm install -g agent-browser && agent-browser install (or: brew install agent-browser)"
+
+const ACCESSIBILITY_HINT =
+  "系统设置 → 隐私与安全性 → 辅助功能，为宿主终端/OpenCode 进程勾选；或运行 `agent-desktop permissions --guide`。"
+const SCREEN_RECORDING_HINT = "系统设置 → 隐私与安全性 → 屏幕录制，为宿主终端/OpenCode 进程勾选后重启会话。"
+const SIDECAR_HINT = "在插件目录运行 `npm run build:native`（需要 Go，macOS 另需 swiftc）。"
 
 export interface DependencyCheck {
   readonly name: string
@@ -24,11 +30,24 @@ export interface DependencyCheck {
   readonly installHint?: string
 }
 
+export interface DiagnosticsPermissions {
+  readonly accessibility: string
+  readonly screenRecording: string
+}
+
 export interface DiagnosticsReport {
   readonly platform: string
   readonly isMac: boolean
   readonly dependencies: readonly DependencyCheck[]
+  /** TCC permission states; null when unknown (CLI missing) or non-mac. */
+  readonly permissions: DiagnosticsPermissions | null
   readonly sidecarAvailable: boolean
+}
+
+export interface HealthIssue {
+  readonly component: string
+  readonly problem: string
+  readonly hint: string
 }
 
 /** Lenient semver-ish parse: takes the first `N.N[.N]` found in raw output. */
@@ -68,7 +87,10 @@ async function checkCli(
   }
 }
 
-/** Probes external CLIs and native sidecar binaries. Fast-fails, never throws. */
+/**
+ * One-shot dependency probe: CLI presence + versions, TCC permissions and
+ * native sidecar binaries. Fast-fails, never throws.
+ */
 export async function collectDiagnostics(signal?: AbortSignal): Promise<DiagnosticsReport> {
   const isMac = process.platform === "darwin"
   const dependencies = isMac
@@ -77,32 +99,69 @@ export async function collectDiagnostics(signal?: AbortSignal): Promise<Diagnost
         checkCli("agent-browser", MIN_AGENT_BROWSER_VERSION, AGENT_BROWSER_INSTALL_HINT, signal),
       ])
     : []
+
+  let permissions: DiagnosticsPermissions | null = null
+  if (isMac && dependencies[0]?.installed) {
+    // TCC permission states are macOS-only; on other platforms getMacDesktopStatus
+    // reports "unsupported" and must not be treated as a permission problem.
+    const status = await getMacDesktopStatus(signal).catch(() => null)
+    if (status) {
+      permissions = { accessibility: status.accessibility, screenRecording: status.screenRecording }
+    }
+  }
+
   return {
     platform: process.platform,
     isMac,
     dependencies,
+    permissions,
     sidecarAvailable: StreamSidecar.available(),
   }
 }
 
-/** Startup warnings for missing/mismatched pieces; empty array = all healthy. */
-export function startupWarnings(report: DiagnosticsReport): string[] {
-  const warnings: string[] = []
+/** Derives actionable issues from a report (no extra probing). */
+export function collectHealthIssues(report: DiagnosticsReport): HealthIssue[] {
+  const issues: HealthIssue[] = []
   for (const dep of report.dependencies) {
     if (!dep.installed) {
-      warnings.push(`[bot] Missing dependency: ${dep.name}. Fix: ${dep.installHint}`)
+      issues.push({ component: dep.name, problem: "CLI 未安装（PATH 未找到）", hint: `运行 \`${dep.installHint}\`。` })
     } else if (dep.versionOk === false) {
-      warnings.push(
-        `[bot] ${dep.name} ${dep.version} is below the verified minimum ${dep.minimumVersion}; CLI commands may fail. Upgrade: ${dep.installHint}`,
-      )
+      issues.push({
+        component: dep.name,
+        problem: `已安装 ${dep.version}，低于已验证版本 ${dep.minimumVersion}，CLI 契约可能不兼容`,
+        hint: `升级：\`${dep.installHint}\`。`,
+      })
+    }
+  }
+  if (report.permissions) {
+    if (report.permissions.accessibility !== "granted") {
+      issues.push({
+        component: "辅助功能权限 (Accessibility)",
+        problem: `当前状态 \`${report.permissions.accessibility}\`，桌面语义操作将失败`,
+        hint: ACCESSIBILITY_HINT,
+      })
+    }
+    if (report.permissions.screenRecording !== "granted") {
+      issues.push({
+        component: "屏幕录制权限 (Screen Recording)",
+        problem: `当前状态 \`${report.permissions.screenRecording}\`，截屏/直播将失败`,
+        hint: SCREEN_RECORDING_HINT,
+      })
     }
   }
   if (report.isMac && !report.sidecarAvailable) {
-    warnings.push(
-      "[bot] Native live-stream helpers not built (dist/bin); live view falls back to JPEG polling. Run `npm run build:native` in the plugin directory.",
-    )
+    issues.push({
+      component: "实时画面 sidecar",
+      problem: "dist/bin 原生二进制缺失，直播将降级为低帧率 JPEG 轮询",
+      hint: SIDECAR_HINT,
+    })
   }
-  return warnings
+  return issues
+}
+
+/** Startup warnings for missing/mismatched pieces; empty array = all healthy. */
+export function startupWarnings(report: DiagnosticsReport): string[] {
+  return collectHealthIssues(report).map((issue) => `[bot] ${issue.component}: ${issue.problem} Fix: ${issue.hint}`)
 }
 
 /** Human-readable `/doctor` output. */
@@ -123,10 +182,16 @@ export function formatDoctorReport(report: DiagnosticsReport): string {
       lines.push(`  - 修复: \`${dep.installHint}\``)
     }
   }
+  if (report.permissions) {
+    lines.push(`- **辅助功能权限 (Accessibility)**: \`${report.permissions.accessibility}\``)
+    lines.push(`- **屏幕录制权限 (Screen Recording)**: \`${report.permissions.screenRecording}\``)
+    if (report.permissions.accessibility !== "granted") lines.push(`  - 修复: ${ACCESSIBILITY_HINT}`)
+    if (report.permissions.screenRecording !== "granted") lines.push(`  - 修复: ${SCREEN_RECORDING_HINT}`)
+  }
   lines.push(
     report.sidecarAvailable
       ? "- **原生直播 sidecar (dist/bin)**: ✔ 已构建（WebRTC 低延迟模式可用）"
-      : "- **原生直播 sidecar (dist/bin)**: ✖ 未构建，实时画面降级为 JPEG 轮询。运行 `npm run build:native`（需 Go + swiftc）。",
+      : `- **原生直播 sidecar (dist/bin)**: ✖ 未构建，实时画面降级为 JPEG 轮询。${SIDECAR_HINT}`,
   )
   return lines.join("\n")
 }

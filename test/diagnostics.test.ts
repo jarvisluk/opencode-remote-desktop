@@ -14,6 +14,7 @@ function report(overrides: Partial<DiagnosticsReport>): DiagnosticsReport {
     platform: "darwin",
     isMac: true,
     dependencies: [],
+    permissions: null,
     sidecarAvailable: true,
     ...overrides,
   }
@@ -40,8 +41,8 @@ test("startupWarnings reports missing CLI, stale version, and unbuilt sidecar", 
   ]
   const warnings = startupWarnings(report({ dependencies: deps, sidecarAvailable: false }))
   assert.equal(warnings.length, 3)
-  assert.match(warnings[0], /Missing dependency: agent-desktop/)
-  assert.match(warnings[1], /below the verified minimum 0\.41\.1/)
+  assert.match(warnings[0], /agent-desktop.*CLI 未安装/)
+  assert.match(warnings[1], /低于已验证版本 0\.41\.1/)
   assert.match(warnings[2], /build:native/)
 })
 
