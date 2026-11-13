@@ -6,7 +6,7 @@ import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
-import { LiveStreamView } from "./stream/view.ts"
+import { LiveStreamView, btn, channelOf, toggleFullscreen } from "./stream/view.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -27,7 +27,24 @@ interface WindowItem {
   visible: boolean
 }
 
-export function LiveScreenView(props: { session: any }): JSX.Element {
+const KEY_NAMES: Record<string, string> = {
+  Enter: "return",
+  Escape: "escape",
+  Tab: "tab",
+  " ": "space",
+  Backspace: "backspace",
+  Delete: "delete",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  PageUp: "pageup",
+  PageDown: "pagedown",
+  Home: "home",
+  End: "end",
+}
+
+export function LiveScreenView(props: { session: any; reason?: string }): JSX.Element {
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal<boolean>(true)
   const [fps, setFps] = createSignal<number>(2) // default 2 fps for smooth low-overhead live preview
@@ -39,6 +56,7 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
   const [takeoverReason, setTakeoverReason] = createSignal<string>("")
 
   let imageRef: HTMLImageElement | null = null
+  let rootRef: HTMLDivElement | undefined
   let isRequestInProgress = false
 
   const getClientRpc = () => {
@@ -216,11 +234,18 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
     })
   }
 
-  const handleKeySend = (keyCombo: string) => {
-    void sendRemoteInput({
-      kind: "key",
-      key: keyCombo,
-    })
+  // Physical keyboard while the image has focus: plain characters are typed, everything else is sent as a key combo.
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.isComposing || ["Meta", "Control", "Alt", "Shift"].includes(e.key)) return
+    e.preventDefault()
+    const shortcut = e.metaKey || e.ctrlKey || e.altKey
+    if (e.key.length === 1 && !shortcut) {
+      void sendRemoteInput({ kind: "type", text: e.key })
+      return
+    }
+    const name = KEY_NAMES[e.key] ?? e.key.toLowerCase()
+    const combo = [e.metaKey && "cmd", e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", name].filter(Boolean).join("+")
+    void sendRemoteInput({ kind: "key", key: combo })
   }
 
   const handleTextSubmit = (e: Event) => {
@@ -302,6 +327,7 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
   })
 
   const element = h("div", {
+    ref: (el: HTMLDivElement) => { rootRef = el },
     style: {
       display: "flex",
       "flex-direction": "column",
@@ -451,8 +477,13 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
             "font-size": "11px",
           },
         }, "刷新帧"),
+        h("button", { title: "全屏（Esc 退出）", onClick: () => toggleFullscreen(rootRef), style: btn() }, "⛶ 全屏"),
       ]),
     ]),
+
+    props.reason ? h("div", {
+      style: { padding: "4px 10px", "font-size": "11px", color: "#fbbf24", background: "rgba(251,191,36,0.08)" },
+    }, `截图模式 · ${channelOf(props.session?.server)} · WebRTC 不可用：${props.reason}`) : null,
 
     // Main Canvas / Image View
     h("div", {
@@ -467,7 +498,11 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
         padding: "4px",
         cursor: "crosshair",
         "user-select": "none",
+        outline: "none",
       },
+      tabIndex: 0,
+      onMouseDown: (e: MouseEvent) => (e.currentTarget as HTMLElement).focus(),
+      onKeyDown: handleKeyDown,
       onContextMenu: handleContextMenu,
       onWheel: handleWheel,
     }, [
@@ -509,45 +544,6 @@ export function LiveScreenView(props: { session: any }): JSX.Element {
         "border-top": "1px solid rgba(255, 255, 255, 0.08)",
       },
     }, [
-      // Quick Keys row
-      h("div", {
-        style: {
-          display: "flex",
-          "align-items": "center",
-          gap: "4px",
-          "flex-wrap": "wrap",
-        },
-      }, [
-        h("span", { style: { color: "rgba(255, 255, 255, 0.5)", "font-size": "10px", "margin-right": "2px" } }, "快捷键:"),
-        ...[
-          { label: "Return", key: "return" },
-          { label: "Esc", key: "escape" },
-          { label: "Tab", key: "tab" },
-          { label: "Space", key: "space" },
-          { label: "Cmd+C", key: "cmd+c" },
-          { label: "Cmd+V", key: "cmd+v" },
-          { label: "Cmd+A", key: "cmd+a" },
-          { label: "Cmd+W", key: "cmd+w" },
-          { label: "↑", key: "up" },
-          { label: "↓", key: "down" },
-          { label: "←", key: "left" },
-          { label: "→", key: "right" },
-        ].map((k) =>
-          h("button", {
-            onClick: () => handleKeySend(k.key),
-            style: {
-              background: "rgba(255, 255, 255, 0.06)",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              color: "inherit",
-              "border-radius": "3px",
-              padding: "2px 6px",
-              "font-size": "10px",
-              cursor: "pointer",
-            },
-          }, k.label)
-        ),
-      ]),
-
       // Direct Text Typing Row
       h("form", {
         onSubmit: handleTextSubmit,
@@ -630,7 +626,7 @@ export default Plugin.define({
         const [fallback, setFallback] = createSignal("")
         return h("div", { style: { height: "100%", width: "100%" } }, () =>
           fallback()
-            ? LiveScreenView({ session: props.session })
+            ? LiveScreenView({ session: props.session, reason: fallback() })
             : LiveStreamView({
                 session: props.session,
                 onUnavailable: (reason) => {
