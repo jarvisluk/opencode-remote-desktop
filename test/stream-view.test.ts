@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { channelOf } from "../src/stream/view.ts"
+import { explainScreenError } from "../src/ui.ts"
 import { createGuiTranslator } from "../src/i18n/gui.ts"
 
 test("channelOf classifies the server connection path in Chinese, English, and Traditional Chinese", () => {
@@ -25,4 +26,28 @@ test("channelOf classifies the server connection path in Chinese, English, and T
   const tZht = createGuiTranslator("zht")
   assert.equal(channelOf(undefined, tZht), "未連線")
   assert.equal(channelOf({ url: "http://192.168.31.6:4096", local: false }, tZht), "區域網路")
+})
+
+test("explainScreenError translates raw RPC and WebRTC errors into clear diagnostics", () => {
+  const rpcErr = explainScreenError("RPC is unavailable: bot", createGuiTranslator("zh"))
+  assert.equal(rpcErr.serviceUnavailable, true)
+  assert.match(rpcErr.summary, /bot 插件/)
+  assert.ok(rpcErr.hint && rpcErr.hint.includes("bot"))
+
+  const rpcErrEn = explainScreenError("RPC is unavailable: bot", createGuiTranslator("en"))
+  assert.equal(rpcErrEn.serviceUnavailable, true)
+  assert.match(rpcErrEn.summary, /Remote bot plugin/)
+
+  const nativeErr = explainScreenError("native stream binary missing: /path/screencapture-stream (run `npm run build:native`)")
+  assert.equal(nativeErr.serviceUnavailable, undefined)
+  assert.match(nativeErr.summary, /build:native/)
+  assert.ok(nativeErr.hint)
+
+  const routeErr = explainScreenError("WebRTC no direct route")
+  assert.match(routeErr.summary, /WebRTC 直连失败/)
+  assert.ok(routeErr.hint)
+
+  const permErr = explainScreenError("Screen Recording permission denied")
+  assert.match(permErr.summary, /屏幕录制权限/)
+  assert.ok(permErr.hint)
 })

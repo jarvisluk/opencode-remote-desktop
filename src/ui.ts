@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, type JSX } from "solid-js"
 import h from "solid-js/h"
 import type { IconName, Ui } from "@opencode/plugin/gui"
+import { createGuiTranslator, type GuiTranslate } from "./i18n/gui.ts"
 
 // OpenCode Desktop theme tokens (see DESIGN.md). Not a public SDK API, so every one keeps a dark fallback.
 const v = (name: string, fallback: string) => `var(--${name}, ${fallback})`
@@ -192,4 +193,76 @@ export function windowFill(el: () => HTMLElement | undefined) {
     }
   })
   return { on, full, toggle: () => (on() ? exit() : enter()) }
+}
+
+const DEFAULT_ERR_T = createGuiTranslator("zh")
+
+export interface ScreenErrorInfo {
+  /** Short, human-friendly summary of what failed. */
+  summary: string
+  /** Actionable remediation hint when known. */
+  hint?: string
+  /** Raw error string from RPC / WebRTC / capture. */
+  raw: string
+  /** Whether the entire remote `bot` RPC service is unavailable (not just WebRTC). */
+  serviceUnavailable?: boolean
+}
+
+/** Translates low-level RPC / WebRTC / capture error strings into clear user-facing diagnostics. */
+export function explainScreenError(raw: string, t: GuiTranslate = DEFAULT_ERR_T): ScreenErrorInfo {
+  const msg = raw.trim()
+  if (!msg) return { summary: "", raw: "" }
+
+  if (/RPC is unavailable:\s*bot/i.test(msg)) {
+    return {
+      summary: t("err.botRpcUnavailable.summary"),
+      hint: t("err.botRpcUnavailable.hint"),
+      raw: msg,
+      serviceUnavailable: true,
+    }
+  }
+  if (/native stream binary missing|build:native/i.test(msg)) {
+    return {
+      summary: t("err.nativeMissing.summary"),
+      hint: t("err.nativeMissing.hint"),
+      raw: msg,
+    }
+  }
+  if (/WebRTC no direct route|WebRTC connection failed/i.test(msg)) {
+    return {
+      summary: t("err.webrtcRoute.summary"),
+      hint: t("err.webrtcRoute.hint"),
+      raw: msg,
+    }
+  }
+  if (/WebRTC connect timeout/i.test(msg)) {
+    return {
+      summary: t("err.webrtcTimeout.summary"),
+      hint: t("err.webrtcTimeout.hint"),
+      raw: msg,
+    }
+  }
+  if (/Screen Recording|screencapture failed| screen capture|录屏|螢幕錄製/i.test(msg)) {
+    return {
+      summary: t("err.screenRecording.summary"),
+      hint: t("err.screenRecording.hint"),
+      raw: msg,
+    }
+  }
+  if (/Window not found/i.test(msg)) {
+    return {
+      summary: t("err.windowNotFound.summary"),
+      hint: t("err.windowNotFound.hint"),
+      raw: msg,
+    }
+  }
+  if (/服务器已断开|伺服器已中斷|Server disconnected/i.test(msg)) {
+    return {
+      summary: t("err.serverDisconnected.summary"),
+      hint: t("err.serverDisconnected.hint"),
+      raw: msg,
+      serviceUnavailable: true,
+    }
+  }
+  return { summary: msg, raw: msg }
 }

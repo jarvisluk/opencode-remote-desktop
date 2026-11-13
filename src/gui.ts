@@ -8,7 +8,7 @@ import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -254,12 +254,13 @@ export function LiveScreenView(props: {
   createEffect(() => {
     if (!streaming()) return
     // Each frame is a full screenshot round trip over RPC, so poll back-to-back with a single frame yield.
+    // When in an error state, back off to 2s so we don't flood the remote server with failing RPC calls.
     let stop = false
     lastFrameAt = 0
     const loop = async () => {
       while (!stop) {
         await fetchNextFrame()
-        await new Promise((r) => setTimeout(r, 16))
+        await new Promise((r) => setTimeout(r, error() ? 2000 : 16))
       }
     }
     void loop()
@@ -273,10 +274,14 @@ export function LiveScreenView(props: {
     if (!err) return ""
     return err.key ? t(err.key, { error: err.detail ?? "" }) : err.detail ?? ""
   }
+  const errInfo = () => explainScreenError(errorText(), t)
+  const fallbackInfo = () => explainScreenError(props.reason || "", t)
   const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
   const summary = () =>
     errorText()
-      ? t("jpeg.summaryError", { error: errorText() })
+      ? errInfo().serviceUnavailable
+        ? t("jpeg.serviceUnavailableSummary", { error: errInfo().summary })
+        : t("jpeg.summaryError", { error: errInfo().summary })
       : !frame()
         ? t("jpeg.summaryConnecting")
         : !streaming()
@@ -311,7 +316,41 @@ export function LiveScreenView(props: {
           draggable: false,
           style: { "max-width": "100%", "max-height": "100%", "object-fit": "contain", display: "block" },
         })
-      : h(ui.Loader, {})),
+      : errorText()
+        ? h("div", {
+            onMouseDown: (e: MouseEvent) => e.stopPropagation(),
+            style: {
+              display: "flex", "flex-direction": "column", "align-items": "flex-start", gap: T.sp(2),
+              "max-width": "440px", margin: T.sp(4), padding: `${T.sp(3)} ${T.sp(4)}`,
+              background: T.bgLayer, "box-shadow": T.elevation, "border-radius": T.radius,
+              cursor: "default", "user-select": "text",
+            },
+          }, [
+            h("div", { style: { display: "flex", "align-items": "center", gap: T.sp(2), color: T.danger, "font-weight": "600" } }, [
+              h("span", { style: { width: "8px", height: "8px", "border-radius": "50%", background: T.danger, flex: "none" } }),
+              h("span", {}, () => errInfo().summary || t("jpeg.cardTitle")),
+            ]),
+            () => errInfo().hint
+              ? h("div", { style: { color: T.muted, "line-height": "1.5" } }, () => errInfo().hint)
+              : null,
+            () => errInfo().raw && errInfo().raw !== errInfo().summary
+              ? h("div", { style: { color: T.faint, "font-family": T.code, "word-break": "break-all" } }, () => t("jpeg.cardRawLabel", { raw: errInfo().raw }))
+              : null,
+            h("div", { style: { display: "flex", gap: T.sp(2), "padding-top": T.sp(1) } }, [
+              h(ui.Button, {
+                variant: "secondary",
+                size: "small",
+                onClick: (_e: MouseEvent) => {
+                  setError(null)
+                  props.onRetryStream?.()
+                  void refreshWindows()
+                  void fetchNextFrame()
+                },
+                children: (() => t("jpeg.cardRetry")) as any,
+              }),
+            ]),
+          ])
+        : h(ui.Loader, {})),
     statusCard({
       title: () => t("status.detailsTitle"),
       tone,
@@ -330,10 +369,22 @@ export function LiveScreenView(props: {
           },
         ] },
         { title: () => t("status.group.video"), rows: [
-          { label: () => t("status.row.mode"), value: () => t("jpeg.modeValue", { fps: fps() }) },
+          {
+            label: () => t("status.row.mode"),
+            value: () => (errInfo().serviceUnavailable ? t("jpeg.modeServiceUnavailable") : t("jpeg.modeValue", { fps: fps() })),
+          },
           {
             label: () => t("status.row.reason"),
-            value: () => (props.reason ? t("jpeg.webrtcUnavailableReason", { reason: props.reason }) : "—"),
+            value: () =>
+              errorText()
+                ? errInfo().raw && errInfo().raw !== errInfo().summary
+                  ? `${errInfo().summary} (${errInfo().raw})`
+                  : errInfo().summary
+                : props.reason
+                  ? fallbackInfo().serviceUnavailable
+                    ? fallbackInfo().summary
+                    : t("jpeg.webrtcUnavailableReason", { reason: fallbackInfo().summary })
+                  : "—",
           },
           { label: () => t("status.row.rtt"), value: () => `${rtt()} ms` },
           { label: () => t("status.row.resolution"), value: () => (frame() ? `${frame()!.imageWidth}×${frame()!.imageHeight}` : "—") },

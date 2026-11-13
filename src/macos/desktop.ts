@@ -2,10 +2,17 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { resolveBinary, runCommand } from "./exec.ts"
-import { binaryPath } from "../stream/sidecar.ts"
+
+const nativeBinDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
+
+function nativeBinaryPath(name: string): string {
+  const ext = process.platform === "win32" ? ".exe" : ""
+  return join(nativeBinDir, `${name}-${process.platform}-${process.arch}${ext}`)
+}
 
 import { REMOTE_INPUT_KINDS, type RemoteInputKind } from "../input-types.ts"
 export { REMOTE_INPUT_KINDS, type RemoteInputKind }
@@ -309,7 +316,7 @@ class SnapServerClient {
   private ensureStarted(): Promise<void> {
     if (this.disabled) return Promise.reject(new Error("snap-server disabled"))
     if (this.readyPromise) return this.readyPromise
-    const bin = binaryPath("bot-capture")
+    const bin = nativeBinaryPath("bot-capture")
     if (!existsSync(bin)) return Promise.reject(new Error("bot-capture missing"))
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
