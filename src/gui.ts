@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
-import type { PanelProps, PanelTab } from "@opencode/plugin/gui"
+import type { MountedSession, PanelProps, PanelTab } from "@opencode/plugin/gui"
 import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
@@ -596,6 +596,8 @@ export default Plugin.define({
   setup(ctx) {
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
+    // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
+    const remote = (session?: MountedSession) => session?.server.local === false
 
     // 1. Add Side Panel
     ctx.add(Panel, {
@@ -611,7 +613,7 @@ export default Plugin.define({
         cached: true,
       },
       list(input): readonly PanelTab[] {
-        if (!input.open.includes(PANEL_ID)) {
+        if (!remote(input.session) || !input.open.includes(PANEL_ID)) {
           return []
         }
         return [
@@ -641,7 +643,7 @@ export default Plugin.define({
     })
 
     // 2. Add Launcher into Side Panel '+' Menu
-    ctx.add(MenuItem, () => ({
+    ctx.add(MenuItem, () => remote(ctx.sessions.current()) ? {
       menu: "session.panel" as const,
       id: "screen",
       title: "Live Screen",
@@ -654,10 +656,10 @@ export default Plugin.define({
           ctx.layout.open(TAB_KEY, curSession)
         }
       },
-    }))
+    } : undefined)
 
     // 3. Add Command for Palette, Keybind & Slash Command
-    ctx.add(Command, () => ({
+    ctx.add(Command, () => remote(ctx.sessions.current()) ? {
       id: "toggle",
       title: "Live Screen: Toggle Remote Desktop Tab",
       section: "session" as const,
@@ -671,6 +673,6 @@ export default Plugin.define({
           ctx.layout.toggle(TAB_KEY, curSession)
         }
       },
-    }))
+    } : undefined)
   },
 })
