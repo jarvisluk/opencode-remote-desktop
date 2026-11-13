@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+import { buildFfmpegArgs, findFfmpeg, pickStreamBackend, type BackendProbe, type StreamBackendPreference } from "./ffmpeg.ts"
 
 const binDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
 
@@ -16,6 +17,10 @@ export interface StreamOptions {
   readonly fps: number
   readonly bitrate: number
   readonly maxDimension: number
+  /** Capture backend selection. Default: "auto" (native on macOS, ffmpeg elsewhere). */
+  readonly backend?: StreamBackendPreference
+  /** Optional override of the ffmpeg capture-source args (everything before the scale filter). */
+  readonly ffmpegInputArgs?: readonly string[]
 }
 
 type Pending = { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }
@@ -32,18 +37,37 @@ export class StreamSidecar {
   }
 
   static available(): boolean {
-    return existsSync(binary("bot-stream")) && existsSync(binary("bot-capture"))
+    return this.probe().backend !== null
+  }
+
+  /** Probes the chosen capture backend (native binaries vs ffmpeg on PATH). */
+  static probe(options: Pick<StreamOptions, "backend" | "ffmpegInputArgs"> = {}): BackendProbe {
+    return pickStreamBackend({
+      preference: options.backend ?? "auto",
+      platform: process.platform,
+      nativeBinariesAvailable: existsSync(binary("bot-stream")) && existsSync(binary("bot-capture")),
+      ffmpegPath: findFfmpeg(),
+    })
   }
 
   private ensure(): ChildProcessWithoutNullStreams {
     if (this.proc) return this.proc
-    const proc = spawn(binary("bot-stream"), [
-      "--capture", binary("bot-capture"),
-      "--ice", this.options.iceServers.join(","),
-      "--fps", String(this.options.fps),
-      "--bitrate", String(this.options.bitrate),
-      "--max-dim", String(this.options.maxDimension),
-    ])
+    const probe = StreamSidecar.probe(this.options)
+    if (!probe.backend) throw new Error(probe.reason ?? "no stream backend available")
+    const args = ["--ice", this.options.iceServers.join(","), "--fps", String(this.options.fps)]
+    if (probe.backend === "native") {
+      args.push("--capture", binary("bot-capture"), "--bitrate", String(this.options.bitrate), "--max-dim", String(this.options.maxDimension))
+    } else {
+      const cmd = [probe.ffmpegPath ?? "ffmpeg", ...buildFfmpegArgs({
+        fps: this.options.fps,
+        bitrate: this.options.bitrate,
+        maxDimension: this.options.maxDimension,
+        platform: process.platform,
+        inputArgs: this.options.ffmpegInputArgs,
+      })]
+      args.push("--raw-cmd", JSON.stringify(cmd))
+    }
+    const proc = spawn(binary("bot-stream"), args)
     proc.stderr.on("data", (d) => process.stderr.write(d))
     createInterface({ input: proc.stdout }).on("line", (line) => {
       let msg: Record<string, unknown>

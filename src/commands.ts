@@ -36,7 +36,7 @@ export function registerBotCommands(
         sessionID,
       })
       const { desktop, keepAwakeActive, browserMode, consoleUrls, routines: routineList } = summary
-      const healthWarnings = startupWarnings(await collectDiagnostics())
+      const healthWarnings = startupWarnings(await collectDiagnostics(undefined, { backend: options.streamBackend }))
       const lines = [
         `### Bot macOS 宿主机状态`,
         `- **平台**: \`${desktop.platform}\` (${desktop.supported ? "已启用" : "当前仅支持 macOS"})`,
@@ -62,7 +62,7 @@ export function registerBotCommands(
     description: "体检宿主机依赖（agent CLI 及版本、原生 sidecar、TCC 权限、浏览器模式）并给出修复建议",
     execute: async ({ sessionID }: CommandInvocation) => {
       const [report, summary] = await Promise.all([
-        collectDiagnostics(),
+        collectDiagnostics(undefined, { backend: options.streamBackend }),
         collectBotStatus({
           awake,
           browser,

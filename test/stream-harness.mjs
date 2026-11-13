@@ -1,5 +1,5 @@
 // Manual end-to-end harness: node test/stream-harness.mjs, then open http://127.0.0.1:8787
-// Bridges a browser page to the bot-stream sidecar without OpenCode in the loop.
+// BOT_RAW=1 node test/stream-harness.mjs uses the ffmpeg raw backend (lavfi testsrc) instead.
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
 import { createInterface } from "node:readline"
@@ -8,7 +8,18 @@ import { fileURLToPath } from "node:url"
 
 const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/bin")
 const tag = `${process.platform}-${process.arch}`
-const sidecar = spawn(path.join(bin, `bot-stream-${tag}`), ["--capture", path.join(bin, `bot-capture-${tag}`)], {
+const rawArgs = [
+  "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30",
+  "-vf", "scale='if(gt(iw,ih),min(iw,1920),-2)':'if(gt(iw,ih),-2,min(ih,1920))'",
+  "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+  "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "60",
+  "-b:v", "4000000", "-maxrate", "4000000", "-bufsize", "8000000",
+  "-an", "-f", "h264", "-nostdin", "-loglevel", "error", "pipe:1",
+]
+const sidecarArgs = process.env.BOT_RAW === "1"
+  ? ["--raw-cmd", JSON.stringify(["ffmpeg", ...rawArgs]), "--fps", "30"]
+  : ["--capture", path.join(bin, `bot-capture-${tag}`)]
+const sidecar = spawn(path.join(bin, `bot-stream-${tag}`), sidecarArgs, {
   stdio: ["pipe", "pipe", "inherit"],
 })
 const pending = new Map()

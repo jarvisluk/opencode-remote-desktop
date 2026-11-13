@@ -32,7 +32,8 @@ import (
 )
 
 var (
-	capturePath = flag.String("capture", "", "path to the platform capture helper")
+	capturePath = flag.String("capture", "", "path to the native capture helper (framed contract)")
+	rawCmd      = flag.String("raw-cmd", "", "JSON array: command emitting raw H.264 Annex-B on stdout (e.g. ffmpeg)")
 	iceServers  = flag.String("ice", "", "comma-separated STUN/TURN URLs (empty = LAN/host candidates only)")
 	fps         = flag.Int("fps", 30, "capture frame rate")
 	bitrate     = flag.Int("bitrate", 4_000_000, "initial video bitrate (bps)")
@@ -65,8 +66,8 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	log.SetPrefix("[bot-stream] ")
-	if *capturePath == "" {
-		log.Fatal("--capture is required")
+	if *capturePath == "" && *rawCmd == "" {
+		log.Fatal("--capture or --raw-cmd is required")
 	}
 
 	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
@@ -256,6 +257,35 @@ func (h *hub) ensureCapture() error {
 	if h.capture != nil {
 		return nil
 	}
+	if *rawCmd != "" {
+		return h.startRaw()
+	}
+	return h.startNative()
+}
+
+// startRaw spawns the --raw-cmd producer (e.g. ffmpeg -f h264 pipe:1) and
+// reframes its Annex-B byte stream into track samples. View-only: raw producers
+// have no stdin contract, so DataChannel input events are dropped.
+func (h *hub) startRaw() error {
+	var argv []string
+	if json.Unmarshal([]byte(*rawCmd), &argv) != nil || len(argv) == 0 {
+		return fmt.Errorf("--raw-cmd must be a JSON array of argv strings")
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	h.capture = cmd
+	go h.pumpRaw(cmd, stdout)
+	return nil
+}
+
+func (h *hub) startNative() error {
 	cmd := exec.Command(*capturePath,
 		"--fps", fmt.Sprint(*fps), "--bitrate", fmt.Sprint(*bitrate), "--max-dim", fmt.Sprint(*maxDim))
 	stdin, err := cmd.StdinPipe()
@@ -320,6 +350,31 @@ func (h *hub) pump(cmd *exec.Cmd, r io.Reader) {
 		lastPts = pts
 		_ = h.track.WriteSample(media.Sample{Data: buf, Duration: dur})
 	}
+	h.captureDone(cmd)
+}
+
+// pumpRaw reframes a raw Annex-B byte stream (no headers, no timestamps) into samples.
+func (h *hub) pumpRaw(cmd *exec.Cmd, r io.Reader) {
+	parser := newAnnexbParser(*fps)
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			for _, s := range parser.feed(buf[:n]) {
+				_ = h.track.WriteSample(s)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	for _, s := range parser.final() {
+		_ = h.track.WriteSample(s)
+	}
+	h.captureDone(cmd)
+}
+
+func (h *hub) captureDone(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	h.mu.Lock()
 	if h.capture == cmd {

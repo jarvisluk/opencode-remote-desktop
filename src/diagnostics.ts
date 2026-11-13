@@ -35,13 +35,20 @@ export interface DiagnosticsPermissions {
   readonly screenRecording: string
 }
 
+export interface StreamBackendInfo {
+  /** "native" = bot-capture (framed contract), "ffmpeg" = raw Annex-B pipe, null = unavailable. */
+  readonly backend: "native" | "ffmpeg" | null
+  /** Set when backend is null. */
+  readonly reason?: string
+}
+
 export interface DiagnosticsReport {
   readonly platform: string
   readonly isMac: boolean
   readonly dependencies: readonly DependencyCheck[]
   /** TCC permission states; null when unknown (CLI missing) or non-mac. */
   readonly permissions: DiagnosticsPermissions | null
-  readonly sidecarAvailable: boolean
+  readonly stream: StreamBackendInfo
 }
 
 export interface HealthIssue {
@@ -89,9 +96,12 @@ async function checkCli(
 
 /**
  * One-shot dependency probe: CLI presence + versions, TCC permissions and
- * native sidecar binaries. Fast-fails, never throws.
+ * the selected live-stream backend. Fast-fails, never throws.
  */
-export async function collectDiagnostics(signal?: AbortSignal): Promise<DiagnosticsReport> {
+export async function collectDiagnostics(
+  signal?: AbortSignal,
+  stream?: { backend?: "auto" | "native" | "ffmpeg" },
+): Promise<DiagnosticsReport> {
   const isMac = process.platform === "darwin"
   const dependencies = isMac
     ? await Promise.all([
@@ -115,7 +125,7 @@ export async function collectDiagnostics(signal?: AbortSignal): Promise<Diagnost
     isMac,
     dependencies,
     permissions,
-    sidecarAvailable: StreamSidecar.available(),
+    stream: StreamSidecar.probe(stream),
   }
 }
 
@@ -149,11 +159,17 @@ export function collectHealthIssues(report: DiagnosticsReport): HealthIssue[] {
       })
     }
   }
-  if (report.isMac && !report.sidecarAvailable) {
+  if (!report.stream.backend) {
     issues.push({
-      component: "实时画面 sidecar",
-      problem: "dist/bin 原生二进制缺失，直播将降级为低帧率 JPEG 轮询",
+      component: "实时画面后端",
+      problem: `无可用采集后端（${report.stream.reason ?? "未知原因"}），直播将降级为低帧率 JPEG 轮询`,
       hint: SIDECAR_HINT,
+    })
+  } else if (report.stream.backend === "ffmpeg") {
+    issues.push({
+      component: "实时画面后端",
+      problem: "使用 FFmpeg 直播：观看可用，但接管期间无键鼠注入（输入将走 agent-desktop RPC 降级路径，延迟较高）",
+      hint: "macOS 上可构建原生后端获得完整能力：`npm run build:native`。",
     })
   }
   return issues
@@ -168,7 +184,10 @@ export function startupWarnings(report: DiagnosticsReport): string[] {
 export function formatDoctorReport(report: DiagnosticsReport): string {
   const lines = [`### Bot Doctor — 依赖体检`]
   if (!report.isMac) {
-    lines.push(`- **平台**: \`${report.platform}\` — 桌面控制当前仅支持 macOS，其余功能已降级关闭。`)
+    lines.push(
+      `- **平台**: \`${report.platform}\` — 桌面控制当前仅支持 macOS（已降级关闭）。`,
+    )
+    lines.push(streamLine(report))
     return lines.join("\n")
   }
   for (const dep of report.dependencies) {
@@ -188,10 +207,16 @@ export function formatDoctorReport(report: DiagnosticsReport): string {
     if (report.permissions.accessibility !== "granted") lines.push(`  - 修复: ${ACCESSIBILITY_HINT}`)
     if (report.permissions.screenRecording !== "granted") lines.push(`  - 修复: ${SCREEN_RECORDING_HINT}`)
   }
-  lines.push(
-    report.sidecarAvailable
-      ? "- **原生直播 sidecar (dist/bin)**: ✔ 已构建（WebRTC 低延迟模式可用）"
-      : `- **原生直播 sidecar (dist/bin)**: ✖ 未构建，实时画面降级为 JPEG 轮询。${SIDECAR_HINT}`,
-  )
+  lines.push(streamLine(report))
   return lines.join("\n")
+}
+
+function streamLine(report: DiagnosticsReport): string {
+  if (report.stream.backend === "native") {
+    return "- **直播后端**: ✔ 原生 bot-capture（WebRTC 低延迟 + 键鼠注入）"
+  }
+  if (report.stream.backend === "ffmpeg") {
+    return "- **直播后端**: ⚠ FFmpeg（观看可用，接管键鼠注入走降级路径）。macOS 完整能力：`npm run build:native`"
+  }
+  return `- **直播后端**: ✖ 不可用（${report.stream.reason ?? "未知原因"}），实时画面降级为 JPEG 轮询。${SIDECAR_HINT}`
 }

@@ -15,7 +15,7 @@ function report(overrides: Partial<DiagnosticsReport>): DiagnosticsReport {
     isMac: true,
     dependencies: [],
     permissions: null,
-    sidecarAvailable: true,
+    stream: { backend: "native" },
     ...overrides,
   }
 }
@@ -39,7 +39,7 @@ test("startupWarnings reports missing CLI, stale version, and unbuilt sidecar", 
     { name: "agent-desktop", installed: false, minimumVersion: "1.1.0", installHint: "npm install -g agent-desktop" },
     { name: "agent-browser", installed: true, version: "0.30.0", versionOk: false, minimumVersion: "0.41.1", installHint: "npm install -g agent-browser" },
   ]
-  const warnings = startupWarnings(report({ dependencies: deps, sidecarAvailable: false }))
+  const warnings = startupWarnings(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }))
   assert.equal(warnings.length, 3)
   assert.match(warnings[0], /agent-desktop.*CLI 未安装/)
   assert.match(warnings[1], /低于已验证版本 0\.41\.1/)
@@ -58,14 +58,23 @@ test("formatDoctorReport renders missing dependencies with fix hints", () => {
   const deps: readonly DependencyCheck[] = [
     { name: "agent-desktop", installed: false, minimumVersion: "1.1.0", installHint: "npm install -g agent-desktop" },
   ]
-  const text = formatDoctorReport(report({ dependencies: deps, sidecarAvailable: false }))
+  const text = formatDoctorReport(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }))
   assert.match(text, /agent-desktop.*✖ 未安装/)
   assert.match(text, /npm install -g agent-desktop/)
-  assert.match(text, /sidecar.*✖ 未构建/)
+  assert.match(text, /直播后端.*✖ 不可用/)
 })
 
 test("formatDoctorReport short-circuits on non-mac platforms", () => {
-  const text = formatDoctorReport(report({ platform: "linux", isMac: false }))
+  const text = formatDoctorReport(report({ platform: "linux", isMac: false, stream: { backend: "ffmpeg" } }))
   assert.match(text, /linux/)
   assert.match(text, /仅支持 macOS/)
+  assert.match(text, /直播后端.*⚠ FFmpeg/)
+})
+
+test("startupWarnings and doctor surface the ffmpeg backend tradeoff", () => {
+  const r = report({ stream: { backend: "ffmpeg" } })
+  const warnings = startupWarnings(r)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /FFmpeg 直播.*键鼠注入/)
+  assert.match(formatDoctorReport(r), /直播后端.*⚠ FFmpeg/)
 })

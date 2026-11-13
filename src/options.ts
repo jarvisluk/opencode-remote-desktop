@@ -1,4 +1,5 @@
 export type KeepAwakeMode = "off" | "active" | "always"
+export type StreamBackendPreference = "auto" | "native" | "ffmpeg"
 
 export interface BotOptions {
   /** Bind address for the Web/Mobile Takeover Console. Default: "0.0.0.0" (reachable via LAN/Tailscale with token). */
@@ -27,6 +28,10 @@ export interface BotOptions {
   readonly streamBitrate: number
   /** Longest edge of the live stream video. Default: 1920. */
   readonly streamMaxDimension: number
+  /** Live stream capture backend: "auto" (native on macOS, ffmpeg elsewhere) | "native" | "ffmpeg". Default: "auto". */
+  readonly streamBackend: StreamBackendPreference
+  /** Overrides the ffmpeg capture-source args (used when the ffmpeg backend runs). */
+  readonly ffmpegInputArgs: readonly string[]
 }
 
 function intOption(v: unknown, min: number, max: number, fallback: number): number {
@@ -75,5 +80,10 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
     streamFps: intOption(opts.streamFps, 5, 60, 30),
     streamBitrate: intOption(opts.streamBitrate, 300_000, 20_000_000, 4_000_000),
     streamMaxDimension: intOption(opts.streamMaxDimension, 640, 3840, 1920),
+    streamBackend:
+      opts.streamBackend === "native" || opts.streamBackend === "ffmpeg" ? opts.streamBackend : "auto",
+    ffmpegInputArgs: Array.isArray(opts.ffmpegInputArgs)
+      ? opts.ffmpegInputArgs.filter((s): s is string => typeof s === "string" && s.length > 0).slice(0, 64)
+      : [],
   }
 }

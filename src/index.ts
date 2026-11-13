@@ -75,22 +75,31 @@ export default Plugin.define({
     const webConsole = new WebTakeoverConsole(options, takeovers)
     const browser = new MacBrowserController(options.reuseHostBrowser)
     const routines = new RoutineScheduler(ctx, () => awake.acquire(), options.routinePollMs)
-    const stream = StreamSidecar.available()
-      ? new StreamSidecar({
-          iceServers: options.iceServers,
-          fps: options.streamFps,
-          bitrate: options.streamBitrate,
-          maxDimension: options.streamMaxDimension,
-        })
-      : null
+    const streamOptions = {
+      iceServers: options.iceServers,
+      fps: options.streamFps,
+      bitrate: options.streamBitrate,
+      maxDimension: options.streamMaxDimension,
+      backend: options.streamBackend,
+      ffmpegInputArgs: options.ffmpegInputArgs,
+    }
+    const streamProbe = StreamSidecar.probe(streamOptions)
+    const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
+    if (!stream) {
+      console.warn(`[bot] 实时直播不可用：${streamProbe.reason ?? "未知原因"}；实时画面将降级为 JPEG 轮询`)
+    } else if (streamProbe.backend === "ffmpeg") {
+      console.warn("[bot] 直播使用 FFmpeg 后端：观看可用，接管期间键鼠注入将走 agent-desktop 降级路径")
+    }
+
+    // Dependency probe: surface missing CLIs / unavailable stream backend at startup
+    // instead of first tool failure. Works on every platform (no-ops are cheap).
+    try {
+      for (const warning of startupWarnings(await collectDiagnostics(undefined, { backend: options.streamBackend }))) console.warn(warning)
+    } catch {
+      // Diagnostics must never block plugin startup.
+    }
 
     if (isMac) {
-      // Dependency probe: surface missing CLIs / unbuilt sidecar at startup instead of first tool failure.
-      try {
-        for (const warning of startupWarnings(await collectDiagnostics())) console.warn(warning)
-      } catch {
-        // Diagnostics must never block plugin startup.
-      }
       try {
         await webConsole.start()
       } catch (err) {
