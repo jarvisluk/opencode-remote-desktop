@@ -5,8 +5,10 @@ import { BotRpc } from "./rpc.ts"
 import { KeepAwakeController } from "./macos/awake.ts"
 import {
   captureScreenJpeg,
+  disposeDesktopHelpers,
   injectRemoteInput,
   listWindows,
+  runAgentDesktop,
   type RemoteInputKind,
 } from "./macos/desktop.ts"
 import { MacBrowserController } from "./macos/browser.ts"
@@ -77,7 +79,6 @@ export default Plugin.define({
 
     const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
     const takeovers = new TakeoverManager(() => awake.acquire())
-    const webConsole = new WebTakeoverConsole(options, takeovers)
     const browser = new MacBrowserController(options.reuseHostBrowser)
     const routines = new RoutineScheduler(ctx, () => awake.acquire(), options.routinePollMs)
     const streamOptions = {
@@ -90,6 +91,7 @@ export default Plugin.define({
     }
     const streamProbe = StreamSidecar.probe(streamOptions)
     const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
+    const webConsole = new WebTakeoverConsole(options, takeovers, stream)
     if (!stream) {
       console.warn(`[bot] 实时直播不可用：${streamProbe.reason ?? "未知原因"}；实时画面将降级为 JPEG 轮询`)
     } else if (streamProbe.backend === "ffmpeg") {
@@ -192,8 +194,8 @@ export default Plugin.define({
         if (input.windowId) args.push("--window-id", input.windowId)
         else if (input.app) args.push("--app", input.app)
         else return { ok: false }
-        const res = await injectRemoteInput({ kind: "key", key: "", app: input.app }, callCtx.signal).catch(() => null)
-        return { ok: res ? res.ok : true }
+        const res = await runAgentDesktop(args, { timeoutMs: 8_000, signal: callCtx.signal })
+        return { ok: res.ok }
       },
       listTakeovers: async () => {
         return {
@@ -321,6 +323,7 @@ export default Plugin.define({
       unsubRes()
       routines.dispose()
       stream?.dispose()
+      disposeDesktopHelpers()
       takeovers.dispose()
       awake.dispose()
       await Promise.allSettled([

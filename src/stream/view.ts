@@ -80,8 +80,19 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   let session: string | undefined
   let statsTimer: ReturnType<typeof setInterval> | undefined
   let takeoverTimer: ReturnType<typeof setInterval> | undefined
+  let connectTimer: ReturnType<typeof setTimeout> | undefined
+  let moveTimer: ReturnType<typeof setTimeout> | undefined
+  let wheelRaf: number | undefined
   let disposed = false
   let lastMove = 0
+  let pendingMove: Record<string, unknown> | null = null
+  let pendingWheel = { dx: 0, dy: 0 }
+  let cachedRect: DOMRect | null = null
+  let rectDirty = true
+
+  const invalidateRect = () => {
+    rectDirty = true
+  }
 
   const rpc = () => props.session?.server?.client?.rpc(BotRpc)
 
@@ -96,22 +107,37 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     props.onUnavailable(reason)
   }
 
+  const clearInputTimers = () => {
+    clearTimeout(moveTimer)
+    moveTimer = undefined
+    pendingMove = null
+    if (wheelRaf !== undefined) {
+      cancelAnimationFrame(wheelRaf)
+      wheelRaf = undefined
+    }
+    pendingWheel = { dx: 0, dy: 0 }
+  }
+
   const retryOrGiveUp = (reason: string) => {
     if (disposed) return
     if (attempt >= MAX_ATTEMPTS) return giveUp(reason)
     clearInterval(statsTimer)
+    clearTimeout(connectTimer)
+    clearInputTimers()
     pc?.close()
     if (session) void rpc()?.streamClose({ session }).catch(() => {})
     session = undefined
     setConnected(false)
     setStatus("reconnecting")
-    setTimeout(() => void connect().catch((err) => giveUp(err?.message ?? String(err))), 1000)
+    setTimeout(() => void connect().catch((err) => giveUp(err?.message ?? String(err))), 600)
   }
 
   const teardown = () => {
     disposed = true
     clearInterval(statsTimer)
     clearInterval(takeoverTimer)
+    clearTimeout(connectTimer)
+    clearInputTimers()
     pc?.close()
     if (session) void rpc()?.streamClose({ session }).catch(() => {})
   }
@@ -130,6 +156,11 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     peer.addTransceiver("video", { direction: "recvonly" })
     dc = peer.createDataChannel("input", { ordered: true })
     peer.ontrack = (e) => {
+      const rx = e.receiver as any
+      if (rx) {
+        if ("playoutDelayHint" in rx) rx.playoutDelayHint = 0
+        if ("jitterBufferTarget" in rx) rx.jitterBufferTarget = 0
+      }
       if (video) {
         video.srcObject = e.streams[0] ?? new MediaStream([e.track])
         void video.play().catch(() => {})
@@ -139,6 +170,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
       if (!current()) return
       const s = peer.connectionState
       if (s === "connected") {
+        clearTimeout(connectTimer)
         setConnected(true)
         setConnectMs(Math.round(performance.now() - started))
         setStatus("live")
@@ -153,21 +185,35 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     // Non-trickle: wait briefly for local candidates so one RPC round trip is enough.
     await new Promise<void>((resolve) => {
       if (peer.iceGatheringState === "complete") return resolve()
-      const done = () => peer.iceGatheringState === "complete" && resolve()
-      peer.addEventListener("icegatheringstatechange", done)
-      setTimeout(resolve, 2000)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = () => {
+        peer.removeEventListener("icegatheringstatechange", onState)
+        clearTimeout(timer)
+        resolve()
+      }
+      const onState = () => {
+        if (peer.iceGatheringState === "complete") finish()
+      }
+      peer.addEventListener("icegatheringstatechange", onState)
+      timer = setTimeout(finish, 400)
     })
     if (!current()) return
 
+    const offerSdp = peer.localDescription?.sdp ?? ""
+    if (!/^a=candidate:/m.test(offerSdp)) {
+      return giveUp("WebRTC local candidates unavailable")
+    }
+
     try {
-      const answer = await client.streamOffer({ sdp: peer.localDescription!.sdp })
+      const answer = await client.streamOffer({ sdp: offerSdp })
       session = answer.session
       await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp })
     } catch (err: any) {
       return giveUp(err?.message ?? "signaling failed")
     }
 
-    setTimeout(() => current() && !connected() && retryOrGiveUp("WebRTC connect timeout"), 10_000)
+    clearTimeout(connectTimer)
+    connectTimer = setTimeout(() => current() && !connected() && retryOrGiveUp("WebRTC connect timeout"), 10_000)
 
     let lastBytes = 0
     let lastFrames = 0
@@ -211,14 +257,26 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     }, 1000)
   }
 
-  const send = (msg: Record<string, unknown>) => {
-    if (dc?.readyState === "open") dc.send(JSON.stringify(msg))
+  const send = (msg: Record<string, unknown>, ephemeral = false) => {
+    if (dc?.readyState !== "open") return
+    if (ephemeral && dc.bufferedAmount > 65_536) return
+    dc.send(JSON.stringify(msg))
+  }
+
+  const getVideoRect = () => {
+    if (!video) return null
+    if (rectDirty || !cachedRect) {
+      cachedRect = video.getBoundingClientRect()
+      rectDirty = false
+    }
+    return cachedRect
   }
 
   const pos = (e: MouseEvent) => {
     if (!video || !video.videoWidth) return null
     // object-fit: contain -> compute the drawn video rect inside the element.
-    const r = video.getBoundingClientRect()
+    const r = getVideoRect()
+    if (!r || r.width <= 0 || r.height <= 0) return null
     const scale = Math.min(r.width / video.videoWidth, r.height / video.videoHeight)
     const w = video.videoWidth * scale
     const hgt = video.videoHeight * scale
@@ -234,12 +292,37 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     const p = pos(e)
     if (!p) return
     if (t === "move") {
+      const msg = { t, ...p, b: e.button, ...mods(e) }
       const now = performance.now()
-      if (now - lastMove < 16) return
-      lastMove = now
-    } else {
-      e.preventDefault()
-      ;(e.currentTarget as HTMLElement).focus()
+      const elapsed = now - lastMove
+      if (elapsed >= 16) {
+        clearTimeout(moveTimer)
+        moveTimer = undefined
+        pendingMove = null
+        lastMove = now
+        send(msg, true)
+      } else {
+        // Trailing-edge coalesce so the cursor's final resting position is never lost.
+        pendingMove = msg
+        if (!moveTimer) {
+          moveTimer = setTimeout(() => {
+            moveTimer = undefined
+            if (pendingMove) {
+              lastMove = performance.now()
+              send(pendingMove, true)
+              pendingMove = null
+            }
+          }, 16 - elapsed)
+        }
+      }
+      return
+    }
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).focus()
+    if (pendingMove) {
+      clearTimeout(moveTimer)
+      moveTimer = undefined
+      pendingMove = null
     }
     send({ t, ...p, b: e.button, ...mods(e) })
   }
@@ -256,6 +339,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     const prev = zoom() ?? fitScale()
     const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next))
     setZoom(z)
+    invalidateRect()
     if (!viewport) return
     // Keep the point under the cursor (or the centre) fixed while zooming.
     const r = viewport.getBoundingClientRect()
@@ -271,7 +355,17 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     // Trackpad pinch arrives as ctrl+wheel: zoom locally instead of sending it to the remote.
     if (e.ctrlKey) return zoomTo((zoom() ?? fitScale()) * Math.exp(-e.deltaY / 100), e)
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
-    send({ t: "wheel", dx: e.deltaX * scale, dy: e.deltaY * scale })
+    pendingWheel.dx += e.deltaX * scale
+    pendingWheel.dy += e.deltaY * scale
+    if (wheelRaf === undefined) {
+      wheelRaf = requestAnimationFrame(() => {
+        wheelRaf = undefined
+        if (pendingWheel.dx || pendingWheel.dy) {
+          send({ t: "wheel", dx: pendingWheel.dx, dy: pendingWheel.dy }, true)
+          pendingWheel = { dx: 0, dy: 0 }
+        }
+      })
+    }
   }
 
   const onKey = (t: "keydown" | "keyup") => (e: KeyboardEvent) => {
@@ -337,20 +431,35 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     h("div", {
       ref: (el: HTMLDivElement) => {
         viewport = el
-        const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
+        const ro = new ResizeObserver(() => {
+          setBox({ w: el.clientWidth, h: el.clientHeight })
+          invalidateRect()
+        })
         ro.observe(el)
         onCleanup(() => ro.disconnect())
       },
+      onScroll: invalidateRect,
       style: () => ({ position: "absolute", inset: "0", display: "flex", overflow: zoom() === null ? "hidden" : "auto" }),
     }, h("video", {
-      ref: (el: HTMLVideoElement) => { video = el },
+      ref: (el: HTMLVideoElement) => {
+        video = el
+        const ro = new ResizeObserver(invalidateRect)
+        ro.observe(el)
+        onCleanup(() => ro.disconnect())
+      },
       autoplay: true,
       muted: true,
       playsInline: true,
       tabIndex: 0,
       "data-bot-screen": "",
-      onResize: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
-      onLoadedMetadata: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
+      onResize: () => {
+        invalidateRect()
+        if (video) setDims({ w: video.videoWidth, h: video.videoHeight })
+      },
+      onLoadedMetadata: () => {
+        invalidateRect()
+        if (video) setDims({ w: video.videoWidth, h: video.videoHeight })
+      },
       onFocus: () => setFocused(true),
       onBlur: () => setFocused(false),
       onMouseDown: onMouse("down"),
@@ -395,7 +504,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
       setTakeover("")
     }) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
-      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => setZoom(null) }),
+      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => { setZoom(null); invalidateRect() } }),
       iconButton(ui, { icon: "outline-magnifier-minus", label: "缩小（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),
       h("span", {
         title: "原始像素 1:1",

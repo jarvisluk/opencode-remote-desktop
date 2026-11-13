@@ -1,9 +1,11 @@
-import { spawn } from "node:child_process"
-import { mkdir, readFile, rm } from "node:fs/promises"
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { existsSync } from "node:fs"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { resolveBinary, runCommand } from "./exec.ts"
+import { binaryPath } from "../stream/sidecar.ts"
 
 import { REMOTE_INPUT_KINDS, type RemoteInputKind } from "../input-types.ts"
 export { REMOTE_INPUT_KINDS, type RemoteInputKind }
@@ -135,30 +137,72 @@ export async function listDisplays(signal?: AbortSignal, forceRefresh = false): 
   return displays
 }
 
-export async function listWindows(app?: string, signal?: AbortSignal): Promise<MacWindowInfo[]> {
-  const bin = resolveBinary("agent-desktop")
-  if (!bin) return []
-  const args = ["list-windows"]
-  if (app) args.push("--app", app)
-  const res = await runCommand(bin, args, { timeoutMs: 8_000, signal })
-  const parsed = parseJsonSafe(res.stdout)
-  if (!parsed?.ok || !Array.isArray(parsed.data)) return []
-  return parsed.data
-    .filter((w: any) => w.visible !== false && w.app_name !== "WindowManager" && Number(w.bounds?.width ?? 0) >= 80)
-    .map((w: any) => ({
-      id: String(w.id ?? ""),
-      appName: String(w.app_name ?? ""),
-      title: String(w.title ?? ""),
-      isFocused: Boolean(w.is_focused),
-      visible: Boolean(w.visible),
-      accessible: Boolean(w.accessible),
-      bounds: {
-        x: Number(w.bounds?.x ?? 0),
-        y: Number(w.bounds?.y ?? 0),
-        width: Number(w.bounds?.width ?? 0),
-        height: Number(w.bounds?.height ?? 0),
-      },
-    }))
+const WINDOWS_CACHE_TTL_MS = 2_000
+const cachedWindows = new Map<string, { data: MacWindowInfo[]; timestamp: number }>()
+const inFlightWindows = new Map<string, Promise<MacWindowInfo[]>>()
+
+export async function listWindows(app?: string, signal?: AbortSignal, forceRefresh = false): Promise<MacWindowInfo[]> {
+  const key = app ?? ""
+  const now = Date.now()
+  if (!forceRefresh) {
+    const cached = cachedWindows.get(key)
+    if (cached && now - cached.timestamp < WINDOWS_CACHE_TTL_MS) {
+      return cached.data
+    }
+    const existing = inFlightWindows.get(key)
+    if (existing) return existing
+  }
+  const mapRawWindows = (rows: any[]): MacWindowInfo[] =>
+    rows
+      .filter((w: any) => w.visible !== false && w.app_name !== "WindowManager" && Number(w.bounds?.width ?? 0) >= 80)
+      .map((w: any) => ({
+        id: String(w.id ?? ""),
+        appName: String(w.app_name ?? ""),
+        title: String(w.title ?? ""),
+        isFocused: Boolean(w.is_focused),
+        visible: Boolean(w.visible),
+        accessible: Boolean(w.accessible),
+        bounds: {
+          x: Number(w.bounds?.x ?? 0),
+          y: Number(w.bounds?.y ?? 0),
+          width: Number(w.bounds?.width ?? 0),
+          height: Number(w.bounds?.height ?? 0),
+        },
+      }))
+
+  const task = (async () => {
+    if (process.platform === "darwin") {
+      try {
+        const res = await snapServer.request({ cmd: "list-windows", app: app || undefined, signal }, 1_500)
+        const rows = JSON.parse(res.jpegBuffer.toString("utf8"))
+        if (Array.isArray(rows)) {
+          const windows = mapRawWindows(rows)
+          cachedWindows.set(key, { data: windows, timestamp: Date.now() })
+          return windows
+        }
+      } catch {
+        // Fall through to agent-desktop CLI
+      }
+    }
+    const bin = resolveBinary("agent-desktop")
+    if (!bin) return []
+    const args = ["list-windows"]
+    if (app) args.push("--app", app)
+    const res = await runCommand(bin, args, { timeoutMs: 2_000, signal })
+    const parsed = parseJsonSafe(res.stdout)
+    if (!parsed?.ok || !Array.isArray(parsed.data)) {
+      const fallback = cachedWindows.get(key)?.data ?? []
+      cachedWindows.set(key, { data: fallback, timestamp: Date.now() })
+      return fallback
+    }
+    const windows = mapRawWindows(parsed.data)
+    cachedWindows.set(key, { data: windows, timestamp: Date.now() })
+    return windows
+  })().finally(() => {
+    inFlightWindows.delete(key)
+  })
+  inFlightWindows.set(key, task)
+  return task
 }
 
 export function parseJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -225,6 +269,231 @@ async function readImageDimensions(filePath: string, jpegBuffer?: Buffer, signal
 // In-flight capture singleflight map to avoid duplicate external process calls
 const inFlightCaptures = new Map<string, Promise<CapturedFrame>>()
 
+interface SnapPending {
+  resolve: (frame: CapturedFrame) => void
+  reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+class SnapServerClient {
+  private proc: ChildProcessWithoutNullStreams | null = null
+  private readyPromise: Promise<void> | null = null
+  private nextId = 1
+  private buf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  private pending = new Map<number, SnapPending>()
+  private idleTimer: ReturnType<typeof setTimeout> | undefined
+  private disabled = false
+
+  private resetIdle() {
+    clearTimeout(this.idleTimer)
+    if (this.pending.size > 0) {
+      this.proc?.ref()
+      return
+    }
+    this.proc?.unref()
+    ;(this.proc?.stdout as any)?.unref?.()
+    ;(this.proc?.stderr as any)?.unref?.()
+    ;(this.proc?.stdin as any)?.unref?.()
+    this.idleTimer = setTimeout(() => this.dispose(), 60_000)
+    this.idleTimer.unref?.()
+  }
+
+  private failAll(reason: string) {
+    for (const [id, req] of this.pending) {
+      clearTimeout(req.timer)
+      req.reject(new Error(reason))
+      this.pending.delete(id)
+    }
+  }
+
+  private ensureStarted(): Promise<void> {
+    if (this.disabled) return Promise.reject(new Error("snap-server disabled"))
+    if (this.readyPromise) return this.readyPromise
+    const bin = binaryPath("bot-capture")
+    if (!existsSync(bin)) return Promise.reject(new Error("bot-capture missing"))
+
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      const child = spawn(bin, ["--snap-server"], { stdio: ["pipe", "pipe", "pipe"] })
+      this.proc = child
+      this.buf = Buffer.alloc(0)
+      let settled = false
+      let errTail = ""
+
+      const bootTimer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        this.dispose()
+        reject(new Error(`snap-server startup timeout${errTail ? `: ${errTail}` : ""}`))
+      }, 3_000)
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        errTail = (errTail + chunk.toString("utf8")).slice(-512)
+        if (!settled && errTail.includes("snap-ready")) {
+          settled = true
+          clearTimeout(bootTimer)
+          resolve()
+        }
+      })
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk
+        while (this.buf.length >= 33) {
+          const payloadLen = this.buf.readUInt32BE(28)
+          if (this.buf.length < 33 + payloadLen) break
+          const id = this.buf.readUInt32BE(0)
+          const imageWidth = this.buf.readUInt32BE(4)
+          const imageHeight = this.buf.readUInt32BE(8)
+          const logicalX = this.buf.readInt32BE(12)
+          const logicalY = this.buf.readInt32BE(16)
+          const logicalWidth = this.buf.readUInt32BE(20)
+          const logicalHeight = this.buf.readUInt32BE(24)
+          const status = this.buf.readUInt8(32)
+          const payload = Buffer.allocUnsafe(payloadLen)
+          this.buf.copy(payload, 0, 33, 33 + payloadLen)
+          this.buf = this.buf.subarray(33 + payloadLen)
+
+          const req = this.pending.get(id)
+          if (!req) continue
+          this.pending.delete(id)
+          clearTimeout(req.timer)
+          this.resetIdle()
+          if (status !== 0) {
+            req.reject(new Error(payload.toString("utf8") || "snap-server capture failed"))
+          } else {
+            req.resolve({
+              jpegPath: "",
+              jpegBuffer: payload,
+              imageWidth,
+              imageHeight,
+              logicalX,
+              logicalY,
+              logicalWidth,
+              logicalHeight,
+              timestamp: Date.now(),
+            })
+          }
+        }
+      })
+
+      child.on("exit", (code) => {
+        clearTimeout(bootTimer)
+        if (this.proc === child) {
+          this.proc = null
+          this.readyPromise = null
+        }
+        if (!settled) {
+          settled = true
+          if (errTail.includes("requires macOS 14")) this.disabled = true
+          reject(new Error(`snap-server exited (${code})${errTail ? `: ${errTail}` : ""}`))
+        }
+        this.failAll(`snap-server exited (${code})`)
+      })
+
+      child.on("error", (err) => {
+        clearTimeout(bootTimer)
+        if (this.proc === child) {
+          this.proc = null
+          this.readyPromise = null
+        }
+        if (!settled) {
+          settled = true
+          reject(err)
+        }
+        this.failAll(err.message)
+      })
+    })
+    return this.readyPromise
+  }
+
+  async request(
+    payload: Record<string, unknown> & { readonly signal?: AbortSignal },
+    timeoutMs = 10_000,
+  ): Promise<CapturedFrame> {
+    await this.ensureStarted()
+    const proc = this.proc
+    if (!proc || proc.killed) throw new Error("snap-server not running")
+    clearTimeout(this.idleTimer)
+
+    const id = this.nextId++
+    if (this.nextId > 0x7fff_ff00) this.nextId = 1
+    const { signal, ...rest } = payload
+    proc.ref()
+    ;(proc.stdout as any)?.ref?.()
+    ;(proc.stderr as any)?.ref?.()
+
+    return new Promise<CapturedFrame>((resolve, reject) => {
+      const onAbort = () => {
+        const req = this.pending.get(id)
+        if (req) {
+          clearTimeout(req.timer)
+          this.pending.delete(id)
+          this.resetIdle()
+        }
+        reject(new Error("Screenshot aborted"))
+      }
+      if (signal?.aborted) return onAbort()
+
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        signal?.removeEventListener("abort", onAbort)
+        this.dispose()
+        reject(new Error("snap-server request timeout"))
+      }, timeoutMs)
+
+      this.pending.set(id, {
+        resolve: (frame) => {
+          signal?.removeEventListener("abort", onAbort)
+          resolve(frame)
+        },
+        reject: (err) => {
+          signal?.removeEventListener("abort", onAbort)
+          reject(err)
+        },
+        timer,
+      })
+      signal?.addEventListener("abort", onAbort, { once: true })
+
+      const line = JSON.stringify({ id, ...rest })
+      proc.stdin.write(`${line}\n`)
+    })
+  }
+
+  async capture(options?: {
+    readonly windowId?: string
+    readonly app?: string
+    readonly screenIndex?: number
+    readonly maxDimension?: number
+    readonly quality?: number
+    readonly signal?: AbortSignal
+  }): Promise<CapturedFrame> {
+    return this.request({
+      screen: options?.screenIndex ?? 0,
+      maxDim: options?.maxDimension ?? 1440,
+      quality: options?.quality ?? 72,
+      ...(options?.windowId ? { windowId: options.windowId } : {}),
+      ...(options?.app ? { app: options.app } : {}),
+      signal: options?.signal,
+    })
+  }
+
+  dispose() {
+    clearTimeout(this.idleTimer)
+    this.idleTimer = undefined
+    const p = this.proc
+    this.proc = null
+    this.readyPromise = null
+    if (p && !p.killed) p.kill("SIGTERM")
+    this.failAll("snap-server disposed")
+  }
+}
+
+const snapServer = new SnapServerClient()
+process.once("exit", () => snapServer.dispose())
+
+export function disposeDesktopHelpers(): void {
+  snapServer.dispose()
+}
+
 export async function captureScreenJpeg(options?: {
   readonly windowId?: string
   readonly app?: string
@@ -264,6 +533,28 @@ async function doCaptureScreenJpeg(options?: {
   readonly keepFile?: boolean
   readonly signal?: AbortSignal
 }): Promise<CapturedFrame> {
+  // Fast path: resident ScreenCaptureKit in-memory JPEG encoder (~45 ms/frame, zero disk I/O).
+  if (process.platform === "darwin") {
+    try {
+      const fast = await snapServer.capture(options)
+      if (options?.keepFile) {
+        const dir = getTempCaptureDir()
+        await mkdir(dir, { recursive: true })
+        const outJpg = join(dir, `${randomUUID()}.jpg`)
+        await writeFile(outJpg, fast.jpegBuffer)
+        return { ...fast, jpegPath: outJpg }
+      }
+      return fast
+    } catch (err: any) {
+      // Surface missing window errors immediately instead of running a redundant fallback process.
+      if (typeof err?.message === "string" && err.message.includes("Window not found")) {
+        throw new Error(`Window not found for screenshot: ${options?.windowId ? `id=${options.windowId}` : `app=${options?.app}`}`)
+      }
+      // Fall back to agent-desktop/screencapture + sips if bot-capture is unavailable or aborted.
+      if (options?.signal?.aborted) throw err
+    }
+  }
+
   const dir = getTempCaptureDir()
   await mkdir(dir, { recursive: true })
   const id = randomUUID()
@@ -441,8 +732,15 @@ export async function injectRemoteInput(
   if (input.kind === "scroll") {
     const x = Math.round(input.x ?? 600)
     const y = Math.round(input.y ?? 400)
-    // agent-desktop: positive dy scrolls up, negative scrolls down
-    const dy = typeof input.deltaY === "number" ? Math.max(-20, Math.min(20, Math.round(input.deltaY))) : -4
+    // agent-desktop: positive dy scrolls up, negative scrolls down; dy=0 is rejected with INVALID_ARGS.
+    if (input.deltaY === 0) {
+      return { ok: true, detail: "No-op scroll" }
+    }
+    let dy = -4
+    if (typeof input.deltaY === "number") {
+      const clamped = Math.max(-20, Math.min(20, input.deltaY))
+      dy = clamped > 0 ? Math.max(1, Math.round(clamped)) : Math.min(-1, Math.round(clamped))
+    }
     const res = await runAgentDesktop(
       ["mouse-wheel", `--x=${x}`, `--y=${y}`, `--dy=${dy}`],
       { headed: true, timeoutMs: 8_000, signal },

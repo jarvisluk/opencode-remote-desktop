@@ -114,12 +114,56 @@ func main() {
 	hub.stopCapture()
 }
 
-// settings drops host candidates no viewer can reach: 198.18.0.0/15 is used by proxy TUN
-// adapters (Clash/Surge fake-ip), and offering it only slows down ICE checks.
+// settings drops host candidates no viewer can reach: 198.18.0.0/15 & fdfe:dcba:9876::/48 (proxy TUN fake-ip),
+// link-local addresses, and Apple/virtual interfaces (awdl, llw, anpi, bridge, vmenet, ap, gif, stf).
+var (
+	_, fakeIPNet, _  = net.ParseCIDR("198.18.0.0/15")
+	_, fakeIP6Net, _ = net.ParseCIDR("fdfe:dcba:9876::/48")
+)
+
+func isAllowedInterface(name string) bool {
+	for _, prefix := range []string{"awdl", "llw", "anpi", "bridge", "vmenet", "ap", "gif", "stf"} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAllowedIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	if fakeIPNet != nil && fakeIPNet.Contains(ip) {
+		return false
+	}
+	if fakeIP6Net != nil && fakeIP6Net.Contains(ip) {
+		return false
+	}
+	return true
+}
+
+var initTCPMux = sync.OnceValue(func() func(*webrtc.SettingEngine) {
+	ln, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		return func(*webrtc.SettingEngine) {}
+	}
+	tm := webrtc.NewICETCPMux(nil, ln, 8)
+	return func(s *webrtc.SettingEngine) {
+		s.SetICETCPMux(tm)
+		s.SetNetworkTypes([]webrtc.NetworkType{
+			webrtc.NetworkTypeUDP4,
+			webrtc.NetworkTypeUDP6,
+			webrtc.NetworkTypeTCP4,
+		})
+	}
+})
+
 func settings() webrtc.SettingEngine {
 	var s webrtc.SettingEngine
-	_, bench, _ := net.ParseCIDR("198.18.0.0/15")
-	s.SetIPFilter(func(ip net.IP) bool { return !bench.Contains(ip) })
+	s.SetInterfaceFilter(isAllowedInterface)
+	s.SetIPFilter(isAllowedIP)
+	initTCPMux()(&s)
 	return s
 }
 
@@ -130,6 +174,7 @@ type hub struct {
 	capture   *exec.Cmd
 	capIn     io.WriteCloser
 	capInMu   sync.Mutex
+	capInBuf  []byte
 	idleTimer *time.Timer
 }
 
@@ -147,6 +192,9 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 	id := newID()
 	fail := func(err error) (string, string, error) {
 		_ = pc.Close()
+		h.mu.Lock()
+		h.scheduleIdleLocked()
+		h.mu.Unlock()
 		return "", "", err
 	}
 
@@ -175,7 +223,7 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 				T string `json:"t"`
 			}
 			if msg.IsString && len(msg.Data) < 8192 && json.Unmarshal(msg.Data, &probe) == nil && inputTypes[probe.T] {
-				h.send(string(msg.Data))
+				h.sendBytes(msg.Data)
 			}
 		})
 	})
@@ -193,6 +241,10 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		return fail(err)
 	}
+	// Pre-warm capture in parallel with answer creation & ICE gathering so the first keyframe is ready on connect.
+	if err := h.ensureCapture(); err != nil {
+		return fail(err)
+	}
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
 		return fail(err)
@@ -202,9 +254,13 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 		return fail(err)
 	}
 	// Non-trickle: one RPC round trip carries every candidate. Unreachable STUN must not stall signaling.
+	gatherTimeout := 1500 * time.Millisecond
+	if len(servers) > 0 {
+		gatherTimeout = 3 * time.Second
+	}
 	select {
 	case <-gathered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(gatherTimeout):
 	}
 
 	h.mu.Lock()
@@ -214,19 +270,11 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 		h.idleTimer = nil
 	}
 	h.mu.Unlock()
-	if err := h.ensureCapture(); err != nil {
-		h.remove(id)
-		return "", "", err
-	}
 	return id, pc.LocalDescription().SDP, nil
 }
 
-func (h *hub) remove(id string) {
-	h.mu.Lock()
-	pc, ok := h.peers[id]
-	delete(h.peers, id)
-	empty := len(h.peers) == 0
-	if empty && h.capture != nil && h.idleTimer == nil {
+func (h *hub) scheduleIdleLocked() {
+	if len(h.peers) == 0 && h.capture != nil && h.idleTimer == nil {
 		h.idleTimer = time.AfterFunc(*idleStop, func() {
 			h.mu.Lock()
 			idle := len(h.peers) == 0
@@ -237,6 +285,13 @@ func (h *hub) remove(id string) {
 			}
 		})
 	}
+}
+
+func (h *hub) remove(id string) {
+	h.mu.Lock()
+	pc, ok := h.peers[id]
+	delete(h.peers, id)
+	h.scheduleIdleLocked()
 	h.mu.Unlock()
 	if ok {
 		_ = pc.Close()
@@ -247,13 +302,29 @@ func (h *hub) send(line string) {
 	h.capInMu.Lock()
 	defer h.capInMu.Unlock()
 	if h.capIn != nil {
-		_, _ = io.WriteString(h.capIn, line+"\n")
+		h.capInBuf = append(h.capInBuf[:0], line...)
+		h.capInBuf = append(h.capInBuf, '\n')
+		_, _ = h.capIn.Write(h.capInBuf)
+	}
+}
+
+func (h *hub) sendBytes(data []byte) {
+	h.capInMu.Lock()
+	defer h.capInMu.Unlock()
+	if h.capIn != nil {
+		h.capInBuf = append(h.capInBuf[:0], data...)
+		h.capInBuf = append(h.capInBuf, '\n')
+		_, _ = h.capIn.Write(h.capInBuf)
 	}
 }
 
 func (h *hub) ensureCapture() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.idleTimer != nil {
+		h.idleTimer.Stop()
+		h.idleTimer = nil
+	}
 	if h.capture != nil {
 		return nil
 	}
@@ -328,6 +399,8 @@ func (h *hub) stopCapture() {
 func (h *hub) pump(cmd *exec.Cmd, r io.Reader) {
 	br := bufio.NewReaderSize(r, 1<<20)
 	header := make([]byte, 13)
+	const maxPooledFrame = 2 << 20
+	scratch := make([]byte, 256<<10)
 	var lastPts uint64
 	for {
 		if _, err := io.ReadFull(br, header); err != nil {
@@ -339,7 +412,15 @@ func (h *hub) pump(cmd *exec.Cmd, r io.Reader) {
 			log.Printf("bad frame length %d", n)
 			break
 		}
-		buf := make([]byte, n)
+		var buf []byte
+		if int(n) <= maxPooledFrame {
+			if cap(scratch) < int(n) {
+				scratch = make([]byte, int(n))
+			}
+			buf = scratch[:int(n)]
+		} else {
+			buf = make([]byte, int(n))
+		}
 		if _, err := io.ReadFull(br, buf); err != nil {
 			break
 		}

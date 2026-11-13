@@ -7,9 +7,13 @@ import { buildFfmpegArgs, findFfmpeg, pickStreamBackend, type BackendProbe, type
 
 const binDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
 
-function binary(name: string): string {
+export function binaryPath(name: string): string {
   const ext = process.platform === "win32" ? ".exe" : ""
   return path.join(binDir, `${name}-${process.platform}-${process.arch}${ext}`)
+}
+
+function binary(name: string): string {
+  return binaryPath(name)
 }
 
 export interface StreamOptions {

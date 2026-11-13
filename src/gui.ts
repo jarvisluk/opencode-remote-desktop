@@ -154,10 +154,26 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
     if (coords) void sendRemoteInput({ kind, ...coords })
   }
 
+  let wheelAccum = 0
+  let wheelTimer: ReturnType<typeof setTimeout> | undefined
+  let wheelCoords: { x: number; y: number } | undefined
+
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault()
     const coords = getLogicalCoordinates(e.clientX, e.clientY)
-    void sendRemoteInput({ kind: "scroll", x: coords?.x, y: coords?.y, deltaY: e.deltaY > 0 ? -4 : 4 })
+    if (coords) wheelCoords = coords
+    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
+    wheelAccum += -e.deltaY * scale
+    if (!wheelTimer) {
+      wheelTimer = setTimeout(() => {
+        wheelTimer = undefined
+        const dy = Math.max(-20, Math.min(20, Math.round(wheelAccum / 24)))
+        wheelAccum = 0
+        if (dy !== 0) {
+          void sendRemoteInput({ kind: "scroll", x: wheelCoords?.x, y: wheelCoords?.y, deltaY: dy })
+        }
+      }, 80)
+    }
   }
 
   // Physical keyboard while the picture has focus: plain characters are typed, everything else is sent as a key combo.
@@ -198,18 +214,19 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
     const takeoverTimer = setInterval(checkTakeovers, 3000)
     onCleanup(() => {
       clearInterval(takeoverTimer)
+      clearTimeout(wheelTimer)
     })
   })
 
   createEffect(() => {
     if (!streaming()) return
-    // Each frame is a full screenshot round trip over RPC, so poll back-to-back instead of at a fixed rate.
+    // Each frame is a full screenshot round trip over RPC, so poll back-to-back with a single frame yield.
     let stop = false
     lastFrameAt = 0
     const loop = async () => {
       while (!stop) {
         await fetchNextFrame()
-        await new Promise((r) => setTimeout(r, 150))
+        await new Promise((r) => setTimeout(r, 16))
       }
     }
     void loop()

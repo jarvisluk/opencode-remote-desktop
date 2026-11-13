@@ -9,6 +9,7 @@ import {
   REMOTE_INPUT_KINDS,
   type RemoteInputKind,
 } from "../macos/desktop.ts"
+import type { StreamSidecar } from "../stream/sidecar.ts"
 import type { TakeoverManager } from "./manager.ts"
 
 const COOKIE_NAME = "bot_auth"
@@ -62,6 +63,21 @@ function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Recor
   })
 }
 
+const BLOCKED_IFACE_PREFIXES = ["awdl", "llw", "anpi", "bridge", "vmenet", "ap", "gif", "stf"]
+
+export function filterHostAddress(ifaceName: string, address: string): boolean {
+  for (const prefix of BLOCKED_IFACE_PREFIXES) {
+    if (ifaceName.startsWith(prefix)) return false
+  }
+  const octets = address.split(".").map(Number)
+  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return false
+  // Drop network/broadcast addresses (.0 / .255), link-local (169.254.0.0/16), and proxy TUN fake-ip (198.18.0.0/15).
+  if (octets[3] === 0 || octets[3] === 255) return false
+  if (octets[0] === 169 && octets[1] === 254) return false
+  if (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) return false
+  return true
+}
+
 function discoverHostAddresses(bindHost: string): string[] {
   if (bindHost === "127.0.0.1" || bindHost === "localhost" || bindHost === "::1") {
     return ["127.0.0.1"]
@@ -69,10 +85,11 @@ function discoverHostAddresses(bindHost: string): string[] {
   const tailscaleIps: string[] = []
   const lanIps: string[] = []
   const nets = networkInterfaces()
-  for (const entries of Object.values(nets)) {
+  for (const [ifaceName, entries] of Object.entries(nets)) {
     if (!entries) continue
     for (const net of entries) {
       if (net.family !== "IPv4" || net.internal) continue
+      if (!filterHostAddress(ifaceName, net.address)) continue
       // Tailscale CGNAT range 100.64.0.0/10
       const octets = net.address.split(".").map(Number)
       if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) {
@@ -92,10 +109,12 @@ export class WebTakeoverConsole {
   private readonly token = randomBytes(24).toString("base64url")
   private readonly options: BotOptions
   private readonly takeovers: TakeoverManager
+  private readonly stream: StreamSidecar | null
 
-  constructor(options: BotOptions, takeovers: TakeoverManager) {
+  constructor(options: BotOptions, takeovers: TakeoverManager, stream: StreamSidecar | null = null) {
     this.options = options
     this.takeovers = takeovers
+    this.stream = stream
   }
 
   async start(): Promise<void> {
@@ -195,6 +214,7 @@ export class WebTakeoverConsole {
       if (req.method === "GET" && url.pathname === "/api/state") {
         const windows = await listWindows()
         const payload = {
+          streamAvailable: Boolean(this.stream),
           takeovers: this.takeovers.list(),
           windows: windows.map((w) => ({
             id: w.id,
@@ -209,6 +229,36 @@ export class WebTakeoverConsole {
           "Cache-Control": "no-store",
         })
         res.end(JSON.stringify(payload))
+        return
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/stream/offer") {
+        if (!this.stream) {
+          res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" })
+          res.end(JSON.stringify({ ok: false, error: "WebRTC stream sidecar unavailable" }))
+          return
+        }
+        const body = await readJsonBody(req, 128 * 1024)
+        const sdp = typeof body.sdp === "string" ? body.sdp : ""
+        if (!sdp) {
+          res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" })
+          res.end(JSON.stringify({ ok: false, error: "Missing SDP offer" }))
+          return
+        }
+        const answer = await this.stream.offer(sdp)
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
+        res.end(JSON.stringify(answer))
+        return
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/stream/close") {
+        const body = await readJsonBody(req)
+        const session = typeof body.session === "string" ? body.session : ""
+        if (this.stream && session) {
+          await this.stream.close(session)
+        }
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
+        res.end(JSON.stringify({ ok: true }))
         return
       }
 
@@ -329,7 +379,7 @@ const CONSOLE_HTML = `<!doctype html>
       justify-content: center;
     }
     #screenWrap { position: relative; line-height: 0; }
-    #screenImg {
+    #screenImg, #screenVideo {
       display: block;
       max-width: 100vw;
       max-height: 100dvh;
@@ -340,9 +390,12 @@ const CONSOLE_HTML = `<!doctype html>
       -webkit-user-drag: none;
       -webkit-touch-callout: none;
       cursor: crosshair;
+      outline: none;
     }
     #screenImg:not([src]) { width: 100vw; height: 100dvh; }
-    #screenWrap[data-mode="view"] #screenImg { cursor: default; }
+    #screenVideo[hidden], #screenImg[hidden] { display: none; }
+    #screenWrap[data-mode="view"] #screenImg,
+    #screenWrap[data-mode="view"] #screenVideo { cursor: default; }
     .placeholder {
       position: absolute;
       inset: 0;
@@ -587,6 +640,7 @@ const CONSOLE_HTML = `<!doctype html>
 <body data-top="closed" data-dock="closed">
   <div id="stage">
     <div id="screenWrap" data-mode="click">
+      <video id="screenVideo" autoplay muted playsinline tabindex="0" hidden></video>
       <img id="screenImg" alt="Mac 实时画面" />
       <div class="placeholder" id="placeholder">正在连接 Mac…</div>
     </div>
@@ -615,9 +669,10 @@ const CONSOLE_HTML = `<!doctype html>
     <span class="vsep"></span>
     <select class="select" id="windowSelect" aria-label="画面来源"><option value="">整个屏幕</option></select>
     <select class="select" id="fpsSelect" aria-label="刷新频率">
-      <option value="900">每秒 1 帧</option>
-      <option value="450">每秒 2 帧</option>
-      <option value="2000">每 2 秒 1 帧</option>
+      <option value="webrtc" selected>WebRTC 实时</option>
+      <option value="-1">JPEG 连续 (最快)</option>
+      <option value="500">JPEG 每秒 2 帧</option>
+      <option value="1000">JPEG 每秒 1 帧</option>
       <option value="0">手动刷新</option>
     </select>
     <button class="icon-btn" id="refreshBtn" type="button" title="刷新画面" aria-label="刷新画面">
@@ -675,6 +730,7 @@ const CONSOLE_HTML = `<!doctype html>
       }
 
       const $ = (id) => document.getElementById(id);
+      const video = $("screenVideo");
       const img = $("screenImg");
       const wrap = $("screenWrap");
       const placeholder = $("placeholder");
@@ -696,13 +752,212 @@ const CONSOLE_HTML = `<!doctype html>
       let prevBlobUrl = null;
       let inFlight = false;
       let timer = null;
+      let continuousStop = true;
       let lastWheel = 0;
       let idleTimer = null;
+
+      // WebRTC state
+      let pc = null;
+      let dc = null;
+      let rtcSession = null;
+      let rtcStatsTimer = null;
+      let rtcConnectTimer = null;
+      let rtcAttempt = 0;
+      let rtcGen = 0;
+      let rtcSupported = typeof RTCPeerConnection !== "undefined";
+      let streamAvailable = rtcSupported;
+      let cachedVideoRect = null;
+      let videoRectDirty = true;
+      let lastMove = 0;
+      let pendingMove = null;
+      let moveTimer = null;
+      let pendingWheel = { dx: 0, dy: 0 };
+      let wheelRaf = 0;
+
+      function invalidateVideoRect() { videoRectDirty = true; }
+      window.addEventListener("resize", invalidateVideoRect, { passive: true });
+      if (typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(invalidateVideoRect).observe(video);
+      }
 
       function setStatus(text, state) {
         statusText.textContent = text;
         if (state) statusDot.dataset.state = state;
       }
+
+      function showMode(mode) {
+        if (mode === "webrtc") {
+          video.hidden = false;
+          img.hidden = true;
+        } else {
+          video.hidden = true;
+          img.hidden = false;
+        }
+      }
+
+      function sendDc(msg, ephemeral) {
+        if (!dc || dc.readyState !== "open") return false;
+        if (ephemeral && dc.bufferedAmount > 65536) return true;
+        dc.send(JSON.stringify(msg));
+        return true;
+      }
+
+      function closeWebRtc(silent) {
+        rtcGen++;
+        clearInterval(rtcStatsTimer);
+        rtcStatsTimer = null;
+        clearTimeout(rtcConnectTimer);
+        rtcConnectTimer = null;
+        clearTimeout(moveTimer);
+        moveTimer = null;
+        pendingMove = null;
+        if (wheelRaf) { cancelAnimationFrame(wheelRaf); wheelRaf = 0; }
+        pendingWheel = { dx: 0, dy: 0 };
+        if (pc) {
+          pc.onconnectionstatechange = null;
+          pc.ontrack = null;
+          pc.close();
+          pc = null;
+        }
+        dc = null;
+        video.srcObject = null;
+        if (rtcSession) {
+          const sid = rtcSession;
+          rtcSession = null;
+          fetch("/api/stream/close", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session: sid }),
+            keepalive: true,
+          }).catch(() => {});
+        }
+        if (!silent) showMode("jpeg");
+      }
+
+      function fallbackToJpeg(reason) {
+        if (fpsSelect.value === "webrtc") fpsSelect.value = "-1";
+        if (reason) setStatus("已切换截图模式：" + reason, "online");
+        scheduleLoop();
+      }
+
+      async function startWebRtc() {
+        if (!rtcSupported || !streamAvailable || windowSelect.value) {
+          fallbackToJpeg();
+          return;
+        }
+        closeWebRtc(true);
+        const gen = ++rtcGen;
+        const started = performance.now();
+        setStatus("WebRTC 连接中…", "busy");
+
+        const peer = new RTCPeerConnection();
+        pc = peer;
+        peer.addTransceiver("video", { direction: "recvonly" });
+        dc = peer.createDataChannel("input", { ordered: true });
+        peer.ontrack = (e) => {
+          const rx = e.receiver;
+          if (rx) {
+            if ("playoutDelayHint" in rx) rx.playoutDelayHint = 0;
+            if ("jitterBufferTarget" in rx) rx.jitterBufferTarget = 0;
+          }
+          video.srcObject = e.streams[0] || new MediaStream([e.track]);
+          video.play().catch(() => {});
+          showMode("webrtc");
+          placeholder.hidden = true;
+          invalidateVideoRect();
+        };
+        peer.onconnectionstatechange = () => {
+          if (gen !== rtcGen) return;
+          const s = peer.connectionState;
+          if (s === "connected") {
+            clearTimeout(rtcConnectTimer);
+            rtcConnectTimer = null;
+            rtcAttempt = 0;
+            const ms = Math.round(performance.now() - started);
+            setStatus("WebRTC · " + ms + " ms", "online");
+          } else if (s === "failed") {
+            if (++rtcAttempt < 2) {
+              setTimeout(() => { if (gen === rtcGen) startWebRtc(); }, 500);
+            } else {
+              fallbackToJpeg("直连失败");
+            }
+          } else if (s === "disconnected") {
+            setStatus("WebRTC 重连中…", "busy");
+          }
+        };
+
+        try {
+          await peer.setLocalDescription(await peer.createOffer());
+          await new Promise((resolve) => {
+            if (peer.iceGatheringState === "complete") return resolve();
+            let t = null;
+            const finish = () => {
+              peer.removeEventListener("icegatheringstatechange", onState);
+              clearTimeout(t);
+              resolve();
+            };
+            const onState = () => { if (peer.iceGatheringState === "complete") finish(); };
+            peer.addEventListener("icegatheringstatechange", onState);
+            t = setTimeout(finish, 400);
+          });
+          if (gen !== rtcGen) return;
+          const offerSdp = (peer.localDescription && peer.localDescription.sdp) || "";
+          if (!/^a=candidate:/m.test(offerSdp)) {
+            return fallbackToJpeg("当前浏览器未开放 WebRTC 候选");
+          }
+
+          const res = await fetch("/api/stream/offer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sdp: offerSdp }),
+          });
+          if (res.status === 503) {
+            streamAvailable = false;
+            return fallbackToJpeg("服务端未启用流媒体");
+          }
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const ans = await res.json();
+          if (gen !== rtcGen) {
+            fetch("/api/stream/close", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ session: ans.session }),
+              keepalive: true,
+            }).catch(() => {});
+            return;
+          }
+          rtcSession = ans.session;
+          await peer.setRemoteDescription({ type: "answer", sdp: ans.sdp });
+          clearTimeout(rtcConnectTimer);
+          rtcConnectTimer = setTimeout(() => {
+            if (gen === rtcGen && peer.connectionState !== "connected") {
+              fallbackToJpeg("连接超时");
+            }
+          }, 3500);
+
+          clearInterval(rtcStatsTimer);
+          rtcStatsTimer = setInterval(async () => {
+            if (gen !== rtcGen || peer.connectionState !== "connected") return;
+            try {
+              const stats = await peer.getStats();
+              let fps = 0;
+              let rttMs = null;
+              stats.forEach((r) => {
+                if (r.type === "inbound-rtp" && r.kind === "video" && r.framesPerSecond != null) fps = Math.round(r.framesPerSecond);
+                if (r.type === "candidate-pair" && r.nominated && r.currentRoundTripTime != null) rttMs = Math.round(r.currentRoundTripTime * 1000);
+              });
+              const parts = ["WebRTC"];
+              if (fps) parts.push(fps + " fps");
+              if (rttMs !== null) parts.push(rttMs + " ms");
+              setStatus(parts.join(" · "), "online");
+            } catch {}
+          }, 1000);
+        } catch (err) {
+          if (gen === rtcGen) fallbackToJpeg(err && err.message ? err.message : "信令异常");
+        }
+      }
+
+      window.addEventListener("pagehide", () => closeWebRtc(true));
 
       // 悬浮把手闲置变淡
       function wake() {
@@ -755,12 +1010,13 @@ const CONSOLE_HTML = `<!doctype html>
         });
       });
 
-      async function fetchFrame() {
-        if (inFlight || document.hidden) return;
+      async function fetchFrame(force) {
+        if (inFlight || (!force && document.hidden && img.src) || fpsSelect.value === "webrtc") return;
         inFlight = true;
         try {
+          const t0 = performance.now();
           const winId = windowSelect.value;
-          const dim = Math.round(Math.max(screen.width, screen.height) * Math.min(devicePixelRatio || 1, 2));
+          const dim = Math.max(1280, Math.min(1920, Math.round(Math.max(screen.width, screen.height) * Math.min(devicePixelRatio || 1, 2))));
           const q = "?maxDim=" + dim + (winId ? "&windowId=" + encodeURIComponent(winId) : "");
           const res = await fetch("/api/frame" + q, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
@@ -773,10 +1029,12 @@ const CONSOLE_HTML = `<!doctype html>
           const blob = await res.blob();
           const nextUrl = URL.createObjectURL(blob);
           img.src = nextUrl;
+          showMode("jpeg");
           placeholder.hidden = true;
           if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
           prevBlobUrl = nextUrl;
-          if (statusDot.dataset.state !== "busy") setStatus(Math.round(logical.w) + " × " + Math.round(logical.h), "online");
+          const ms = Math.round(performance.now() - t0);
+          if (statusDot.dataset.state !== "busy") setStatus("JPEG · " + Math.round(logical.w) + " × " + Math.round(logical.h) + " · " + ms + " ms", "online");
         } catch (e) {
           setStatus("画面获取失败：" + e.message, "error");
         } finally {
@@ -789,6 +1047,11 @@ const CONSOLE_HTML = `<!doctype html>
           const res = await fetch("/api/state", { cache: "no-store" });
           if (!res.ok) return;
           const data = await res.json();
+          if (typeof data.streamAvailable === "boolean") {
+            streamAvailable = data.streamAvailable && rtcSupported;
+            const rtcOpt = fpsSelect.querySelector('option[value="webrtc"]');
+            if (rtcOpt) rtcOpt.disabled = !streamAvailable;
+          }
           if (document.activeElement !== windowSelect) {
             const currentVal = windowSelect.value;
             const opts = ['<option value="">整个屏幕</option>'];
@@ -814,13 +1077,40 @@ const CONSOLE_HTML = `<!doctype html>
         } catch {}
       }
 
+      function stopJpegLoops() {
+        if (timer) { clearInterval(timer); timer = null; }
+        continuousStop = true;
+      }
+
       function scheduleLoop() {
-        if (timer) clearInterval(timer);
-        const ms = Number(fpsSelect.value);
-        if (ms > 0) timer = setInterval(fetchFrame, ms);
+        stopJpegLoops();
+        const mode = fpsSelect.value;
+        if (mode === "webrtc" && !windowSelect.value) {
+          startWebRtc();
+          return;
+        }
+        closeWebRtc(false);
+        const ms = Number(mode);
+        if (ms < 0) {
+          continuousStop = false;
+          const pump = async () => {
+            let first = true;
+            while (!continuousStop && fpsSelect.value !== "webrtc") {
+              await fetchFrame(first);
+              first = false;
+              await new Promise((r) => setTimeout(r, 16));
+            }
+          };
+          pump();
+        } else if (ms > 0) {
+          timer = setInterval(fetchFrame, ms);
+        }
       }
 
       async function sendInput(payload) {
+        if (payload.kind === "type" && payload.text && sendDc({ t: "text", s: payload.text })) {
+          return;
+        }
         setStatus("发送中…", "busy");
         wake();
         try {
@@ -831,11 +1121,135 @@ const CONSOLE_HTML = `<!doctype html>
           });
           const out = await res.json();
           setStatus(out.ok ? (out.detail || "已发送") : "失败：" + (out.detail || ""), out.ok ? "online" : "error");
-          setTimeout(fetchFrame, 160);
+          if (fpsSelect.value !== "webrtc") setTimeout(fetchFrame, 120);
         } catch (e) {
           setStatus("发送失败：" + e.message, "error");
         }
       }
+
+      function videoPos(ev) {
+        if (!video.videoWidth || !video.videoHeight) return null;
+        if (videoRectDirty || !cachedVideoRect) {
+          cachedVideoRect = video.getBoundingClientRect();
+          videoRectDirty = false;
+        }
+        const r = cachedVideoRect;
+        if (!r.width || !r.height) return null;
+        const scale = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+        const w = video.videoWidth * scale;
+        const h = video.videoHeight * scale;
+        const x = (ev.clientX - r.left - (r.width - w) / 2) / w;
+        const y = (ev.clientY - r.top - (r.height - h) / 2) / h;
+        if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+        return { x, y, px: ev.clientX - r.left, py: ev.clientY - r.top };
+      }
+
+      function mods(ev) {
+        return { shift: ev.shiftKey, ctrl: ev.ctrlKey, alt: ev.altKey, meta: ev.metaKey };
+      }
+
+      video.addEventListener("mousemove", (ev) => {
+        if (clickMode === "view" || !dc || dc.readyState !== "open") return;
+        const p = videoPos(ev);
+        if (!p) return;
+        const msg = { t: "move", x: p.x, y: p.y, b: ev.button, ...mods(ev) };
+        const now = performance.now();
+        const elapsed = now - lastMove;
+        if (elapsed >= 16) {
+          clearTimeout(moveTimer);
+          moveTimer = null;
+          pendingMove = null;
+          lastMove = now;
+          sendDc(msg, true);
+        } else {
+          pendingMove = msg;
+          if (!moveTimer) {
+            moveTimer = setTimeout(() => {
+              moveTimer = null;
+              if (pendingMove) {
+                lastMove = performance.now();
+                sendDc(pendingMove, true);
+                pendingMove = null;
+              }
+            }, 16 - elapsed);
+          }
+        }
+      });
+
+      video.addEventListener("mousedown", (ev) => {
+        setTop(false);
+        if (clickMode === "view") return;
+        const p = videoPos(ev);
+        if (!p) return;
+        ev.preventDefault();
+        video.focus();
+        lastPoint = { x: logical.x + p.x * logical.w, y: logical.y + p.y * logical.h };
+        if (clickMode === "click") {
+          if (pendingMove) { clearTimeout(moveTimer); moveTimer = null; pendingMove = null; }
+          sendDc({ t: "down", x: p.x, y: p.y, b: ev.button, ...mods(ev) });
+        }
+      });
+
+      video.addEventListener("mouseup", (ev) => {
+        if (clickMode === "view") return;
+        const p = videoPos(ev);
+        if (!p) return;
+        ev.preventDefault();
+        if (clickMode === "click") {
+          sendDc({ t: "up", x: p.x, y: p.y, b: ev.button, ...mods(ev) });
+        } else if (clickMode === "double_click") {
+          ripple(p);
+          for (let i = 0; i < 2; i++) {
+            sendDc({ t: "down", x: p.x, y: p.y, b: 0, ...mods(ev) });
+            sendDc({ t: "up", x: p.x, y: p.y, b: 0, ...mods(ev) });
+          }
+        } else if (clickMode === "right_click") {
+          ripple(p);
+          sendDc({ t: "down", x: p.x, y: p.y, b: 2, ...mods(ev) });
+          sendDc({ t: "up", x: p.x, y: p.y, b: 2, ...mods(ev) });
+        }
+      });
+
+      video.addEventListener("contextmenu", (ev) => {
+        if (clickMode !== "view") ev.preventDefault();
+      });
+
+      video.addEventListener("wheel", (ev) => {
+        if (clickMode === "view") return;
+        ev.preventDefault();
+        const scale = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1;
+        pendingWheel.dx += ev.deltaX * scale;
+        pendingWheel.dy += ev.deltaY * scale;
+        if (!wheelRaf) {
+          wheelRaf = requestAnimationFrame(() => {
+            wheelRaf = 0;
+            if (pendingWheel.dx || pendingWheel.dy) {
+              sendDc({ t: "wheel", dx: pendingWheel.dx, dy: pendingWheel.dy }, true);
+              pendingWheel = { dx: 0, dy: 0 };
+            }
+          });
+        }
+      }, { passive: false });
+
+      function onVideoKey(t) {
+        return (ev) => {
+          if (ev.isComposing || (ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === ".")) return;
+          if (!dc || dc.readyState !== "open") return;
+          ev.preventDefault();
+          if (t === "keydown" && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+            sendDc({ t: "text", s: ev.key });
+            return;
+          }
+          if (t === "keyup" && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) return;
+          sendDc({ t, code: ev.code, ...mods(ev) });
+        };
+      }
+      video.addEventListener("keydown", onVideoKey("keydown"));
+      video.addEventListener("keyup", onVideoKey("keyup"));
+      video.addEventListener("paste", (ev) => {
+        const text = ev.clipboardData && ev.clipboardData.getData("text/plain");
+        if (text && sendDc({ t: "text", s: text })) ev.preventDefault();
+      });
 
       function toMac(ev) {
         const rect = img.getBoundingClientRect();
@@ -913,8 +1327,21 @@ const CONSOLE_HTML = `<!doctype html>
         sendInput({ kind: "scroll", x: lastPoint.x, y: lastPoint.y, deltaY: -5 })
       );
 
-      $("refreshBtn").addEventListener("click", fetchFrame);
-      windowSelect.addEventListener("change", fetchFrame);
+      $("refreshBtn").addEventListener("click", () => {
+        if (fpsSelect.value === "webrtc" && !windowSelect.value) startWebRtc();
+        else fetchFrame(true);
+      });
+      windowSelect.addEventListener("change", () => {
+        if (windowSelect.value) {
+          closeWebRtc(false);
+          if (fpsSelect.value === "webrtc") fpsSelect.value = "-1";
+          fetchFrame();
+          scheduleLoop();
+        } else {
+          if (streamAvailable) fpsSelect.value = "webrtc";
+          scheduleLoop();
+        }
+      });
       fpsSelect.addEventListener("change", scheduleLoop);
 
       $("resumeBtn").addEventListener("click", async () => {
@@ -928,9 +1355,15 @@ const CONSOLE_HTML = `<!doctype html>
         setStatus("已交还 AI", "online");
       });
 
-      fetchState();
-      fetchFrame();
-      scheduleLoop();
+      fetchState().then(() => {
+        if (streamAvailable && !windowSelect.value) {
+          startWebRtc();
+        } else {
+          if (fpsSelect.value === "webrtc") fpsSelect.value = "-1";
+          fetchFrame(true);
+          scheduleLoop();
+        }
+      });
       setInterval(fetchState, 3000);
     })();
   </script>
