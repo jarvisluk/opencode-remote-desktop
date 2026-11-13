@@ -113,9 +113,9 @@ export function statusCard(p: { tone: () => Tone; summary: () => string; open: (
 /** Top-right card shown while a human takeover is pending. */
 export function takeoverCard(ui: Ui, reason: () => string, resume: () => void): JSX.Element {
   return h("div", {
-    style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "50%" }),
+    style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
   }, [
-    h("span", { style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => `人工接管：${reason()}`),
+    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => `人工接管：${reason()}`),
     h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: "完成并恢复 AI" }),
   ]) as unknown as JSX.Element
 }

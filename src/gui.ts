@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
-import type { MountedSession, PanelProps, PanelTab, Ui } from "@opencode/plugin/gui"
-import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
+import type { MountedSession, PanelProps, PanelTab, ServerRef, ToastHandle, Ui } from "@opencode/plugin/gui"
+import { createSignal, createMemo, onMount, onCleanup, createEffect } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
@@ -45,8 +45,16 @@ const KEY_NAMES: Record<string, string> = {
   End: "end",
 }
 
-export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; onRetryStream?: () => void }): JSX.Element {
+export function LiveScreenView(props: {
+  session: any
+  ui: Ui
+  reason?: string
+  takeoverReason?: () => string
+  onResolveTakeover?: () => void
+  onRetryStream?: () => void
+}): JSX.Element {
   const ui = props.ui
+  const curSession = () => (typeof props.session === "function" ? props.session() : props.session)
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal(true)
   // Measured frames per second; screenshot polling runs as fast as each round trip allows.
@@ -68,7 +76,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
 
   const getClientRpc = () => {
     try {
-      const client = props.session?.server?.client
+      const client = curSession()?.server?.client
       if (client && typeof client.rpc === "function") return client.rpc(BotRpc)
     } catch (e) {
       console.error("[bot-gui] Failed to get session server RPC client:", e)
@@ -108,18 +116,22 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
     }
   }
 
+  const activeTakeoverReason = () => (props.takeoverReason ? props.takeoverReason() : takeoverReason())
+
   const checkTakeovers = async () => {
     try {
+      const s = curSession()
       const list = await getClientRpc()?.listTakeovers({})
-      const mine = list?.items.find((i: any) => !props.session?.id || i.sessionID === props.session.id)
+      const mine = list?.items.find((i: any) => !s?.id || i.sessionID === s.id)
       setTakeoverReason(mine ? mine.reason || "需要手动操作" : "")
     } catch {}
   }
 
   const resumeAI = async () => {
     try {
-      await getClientRpc()?.resolveTakeover({ sessionID: props.session?.id, note: "User completed action in Live Screen" })
+      await getClientRpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
       setTakeoverReason("")
+      props.onResolveTakeover?.()
     } catch (e: any) {
       setError(`恢复失败：${e?.message}`)
     }
@@ -207,13 +219,22 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
     } catch {}
   }
 
+  createEffect(() => {
+    curSession()?.id
+    if (!props.takeoverReason) void checkTakeovers()
+  })
+
   onMount(() => {
     void refreshWindows()
-    void checkTakeovers()
     void fetchNextFrame()
-    const takeoverTimer = setInterval(checkTakeovers, 3000)
+    if (!props.takeoverReason) {
+      void checkTakeovers()
+      const takeoverTimer = setInterval(checkTakeovers, 3000)
+      onCleanup(() => {
+        clearInterval(takeoverTimer)
+      })
+    }
     onCleanup(() => {
-      clearInterval(takeoverTimer)
       clearTimeout(wheelTimer)
     })
   })
@@ -233,7 +254,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
     onCleanup(() => { stop = true })
   })
 
-  const server = () => props.session?.server
+  const server = () => curSession()?.server
   const fill = windowFill(() => rootRef)
   const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
   const summary = () => error() ? `截图 · ${error()}` : !frame() ? "截图连接中" : !streaming() ? "截图 · 已暂停" : `截图 · ${fps()} fps · ${rtt()} ms`
@@ -286,7 +307,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string; o
         { title: "输入", rows: [{ label: "键鼠", value: () => "agent-desktop 逐条注入" }] },
       ]),
     }),
-    () => takeoverReason() ? takeoverCard(ui, takeoverReason, () => void resumeAI()) : null,
+    () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI()) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
         label: "输入文字",
@@ -321,7 +342,174 @@ export default Plugin.define({
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
     // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
-    const remote = (session?: MountedSession) => session?.server.local === false
+    const remote = (session?: { server: ServerRef }) => session?.server.local === false
+
+    // Reactive map of active takeovers across connected servers, keyed by `${serverId}\n${sessionID}` (SessionRef.key).
+    const [takeoversBySession, setTakeoversBySession] = createSignal<Record<string, { id: string; reason: string }>>({})
+    const activeToasts = new Map<string, ToastHandle>()
+    const autoOpenedTakeovers = new Set<string>()
+    const watchedServers = new Map<string, () => void>()
+
+    const makeSessionKey = (serverId: string, sessionID: string) => `${serverId}\n${sessionID}`
+
+    const dismissToast = (key: string) => {
+      const prev = activeToasts.get(key)
+      if (prev) {
+        prev.dismiss()
+        activeToasts.delete(key)
+      }
+    }
+
+    const setTakeoverEntry = (server: ServerRef, item: { id: string; sessionID: string; reason: string }, notifyUser: boolean) => {
+      const key = makeSessionKey(server.id, item.sessionID)
+      const reason = item.reason || "需要手动操作"
+      setTakeoversBySession((prev) => {
+        if (prev[key]?.id === item.id && prev[key]?.reason === reason) return prev
+        return { ...prev, [key]: { id: item.id, reason } }
+      })
+
+      const targetSession = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === item.sessionID)
+      if (targetSession && remote(targetSession) && !autoOpenedTakeovers.has(item.id)) {
+        autoOpenedTakeovers.add(item.id)
+        ctx.layout.open(TAB_KEY, targetSession, { tab: "open" })
+      }
+
+      if (!notifyUser) return
+
+      void ctx.attention
+        .notify({
+          id: item.id,
+          title: "等待人工接管",
+          message: reason,
+          variant: "default",
+          session: { server: server.id, id: item.sessionID },
+        })
+        .catch(() => {})
+
+      dismissToast(key)
+      const toast = ctx.toast.show({
+        title: "等待人工接管",
+        description: reason,
+        variant: "default",
+        persistent: true,
+        actions: [
+          {
+            label: "已完成，恢复 AI",
+            run() {
+              void server.client
+                .rpc(BotRpc)
+                .resolveTakeover({ sessionID: item.sessionID, note: "User completed takeover via Desktop notification" })
+                .then(() => {
+                  clearTakeoverEntry(server.id, item.sessionID)
+                })
+                .catch(() => {})
+            },
+          },
+        ],
+      })
+      activeToasts.set(key, toast)
+    }
+
+    const clearTakeoverEntry = (serverId: string, sessionID: string) => {
+      const key = makeSessionKey(serverId, sessionID)
+      dismissToast(key)
+      setTakeoversBySession((prev) => {
+        if (!(key in prev)) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
+
+    const attachServer = (server: ServerRef) => {
+      if (watchedServers.has(server.id)) return
+      let rpc: ReturnType<typeof server.client.rpc<typeof BotRpc>>
+      try {
+        rpc = server.client.rpc(BotRpc)
+      } catch {
+        return
+      }
+
+      let disposed = false
+      const syncInitial = async () => {
+        try {
+          const res = (await rpc.listTakeovers({})) as { items?: Array<{ id: string; sessionID: string; reason: string }> }
+          if (disposed) return
+          for (const item of res.items ?? []) {
+            setTakeoverEntry(server, { id: item.id, sessionID: item.sessionID, reason: item.reason }, false)
+          }
+        } catch {
+          // Server may not have the bot plugin enabled; ignore silently.
+        }
+      }
+      void syncInitial()
+
+      const unsubReq = rpc.events.on("takeoverRequested", (ev) => {
+        if (disposed) return
+        const data = ev.data as { id: string; sessionID: string; reason: string }
+        setTakeoverEntry(server, data, true)
+      })
+      const unsubRes = rpc.events.on("takeoverResolved", (ev) => {
+        if (disposed) return
+        const data = ev.data as { id: string; sessionID: string }
+        clearTakeoverEntry(server.id, data.sessionID)
+      })
+
+      watchedServers.set(server.id, () => {
+        disposed = true
+        unsubReq()
+        unsubRes()
+      })
+    }
+
+    const detachServer = (serverId: string) => {
+      const stop = watchedServers.get(serverId)
+      if (stop) {
+        stop()
+        watchedServers.delete(serverId)
+      }
+      const prefix = `${serverId}\n`
+      for (const key of [...activeToasts.keys()]) {
+        if (key.startsWith(prefix)) dismissToast(key)
+      }
+      setTakeoversBySession((prev) => {
+        const keys = Object.keys(prev).filter((k) => k.startsWith(prefix))
+        if (keys.length === 0) return prev
+        const next = { ...prev }
+        for (const k of keys) delete next[k]
+        return next
+      })
+    }
+
+    createEffect(() => {
+      const ids = ctx.servers.list()
+      const activeIds = new Set<string>()
+      for (const id of ids) {
+        const srv = ctx.servers.get(id)
+        if (srv && srv.connected && srv.compatible !== false) {
+          activeIds.add(id)
+          attachServer(srv)
+        }
+      }
+      for (const existingId of [...watchedServers.keys()]) {
+        if (!activeIds.has(existingId)) detachServer(existingId)
+      }
+    })
+
+    // If a session with a pending takeover is opened or focused after the event arrived, open Live Screen once for it.
+    createEffect(() => {
+      const cur = ctx.sessions.current()
+      if (!cur || !remote(cur)) return
+      const entry = takeoversBySession()[cur.key]
+      if (entry && !autoOpenedTakeovers.has(entry.id)) {
+        autoOpenedTakeovers.add(entry.id)
+        ctx.layout.open(TAB_KEY, cur, { tab: "open" })
+      }
+    })
+
+    onCleanup(() => {
+      for (const id of [...watchedServers.keys()]) detachServer(id)
+    })
 
     // 1. Add Side Panel
     ctx.add(Panel, {
@@ -352,18 +540,39 @@ export default Plugin.define({
       render(props: PanelProps): JSX.Element {
         // Prefer the WebRTC stream; fall back to JPEG polling over RPC when no direct route exists.
         const [fallback, setFallback] = createSignal("")
-        return h("div", { style: { height: "100%", width: "100%" } }, () =>
-          fallback()
-            ? LiveScreenView({ session: props.session, ui: ctx.ui, reason: fallback(), onRetryStream: () => setFallback("") })
-            : LiveStreamView({
-                session: props.session,
+        const serverId = createMemo(() => props.session?.server.id)
+        const sessionGetter = () => props.session
+        const takeoverReason = () => {
+          const s = props.session
+          return s ? takeoversBySession()[s.key]?.reason ?? "" : ""
+        }
+        const onResolveTakeover = () => {
+          const s = props.session
+          if (s) clearTakeoverEntry(s.server.id, s.id)
+        }
+        return h("div", { style: { height: "100%", width: "100%" } }, () => {
+          // Re-create connection only when switching to a different remote server; same-server session switches keep the live stream open.
+          serverId()
+          return fallback()
+            ? LiveScreenView({
+                session: sessionGetter,
                 ui: ctx.ui,
+                reason: fallback(),
+                takeoverReason,
+                onResolveTakeover,
+                onRetryStream: () => setFallback(""),
+              })
+            : LiveStreamView({
+                session: sessionGetter,
+                ui: ctx.ui,
+                takeoverReason,
+                onResolveTakeover,
                 onUnavailable: (reason) => {
                   console.warn("[bot-gui] WebRTC unavailable, falling back to JPEG:", reason)
                   setFallback(reason)
                 },
-              }),
-        ) as unknown as JSX.Element
+              })
+        }) as unknown as JSX.Element
       },
     })
 

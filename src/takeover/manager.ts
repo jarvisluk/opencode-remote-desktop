@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto"
 
+export type TakeoverResolveSource = "ui" | "chat" | "command" | "superseded"
+
 export interface PendingTakeover {
   readonly id: string
   readonly sessionID: string
@@ -9,15 +11,27 @@ export interface PendingTakeover {
 }
 
 interface InternalTakeover extends PendingTakeover {
-  readonly resolve: (note?: string) => void
-  readonly reject: (reason: Error) => void
+  readonly resolve?: (note?: string) => void
+  readonly reject?: (reason: Error) => void
   readonly releaseAwake: () => void
+}
+
+function toPublic(entry: PendingTakeover): PendingTakeover {
+  return {
+    id: entry.id,
+    sessionID: entry.sessionID,
+    reason: entry.reason,
+    ...(entry.app !== undefined ? { app: entry.app } : {}),
+    createdAt: entry.createdAt,
+  }
 }
 
 export class TakeoverManager {
   private readonly pending = new Map<string, InternalTakeover>()
   private readonly onRequestCallbacks = new Set<(item: PendingTakeover) => void>()
-  private readonly onResolveCallbacks = new Set<(item: PendingTakeover, note?: string) => void>()
+  private readonly onResolveCallbacks = new Set<
+    (item: PendingTakeover, note?: string, source?: TakeoverResolveSource) => void
+  >()
   private readonly acquireAwake: () => () => void
 
   constructor(acquireAwake: () => () => void) {
@@ -28,14 +42,13 @@ export class TakeoverManager {
     return this.pending.size
   }
 
+  getBySession(sessionID: string): PendingTakeover | undefined {
+    const entry = this.pending.get(sessionID)
+    return entry ? toPublic(entry) : undefined
+  }
+
   list(): PendingTakeover[] {
-    return [...this.pending.values()].map(({ id, sessionID, reason, app, createdAt }) => ({
-      id,
-      sessionID,
-      reason,
-      app,
-      createdAt,
-    }))
+    return [...this.pending.values()].map(toPublic)
   }
 
   onRequested(cb: (item: PendingTakeover) => void): () => void {
@@ -43,9 +56,37 @@ export class TakeoverManager {
     return () => this.onRequestCallbacks.delete(cb)
   }
 
-  onResolved(cb: (item: PendingTakeover, note?: string) => void): () => void {
+  onResolved(cb: (item: PendingTakeover, note?: string, source?: TakeoverResolveSource) => void): () => void {
     this.onResolveCallbacks.add(cb)
     return () => this.onResolveCallbacks.delete(cb)
+  }
+
+  request(input: {
+    readonly sessionID: string
+    readonly reason: string
+    readonly app?: string
+  }): PendingTakeover {
+    if (this.pending.has(input.sessionID)) {
+      this.resolveBySession(input.sessionID, "Superseded by newer takeover request", { source: "superseded" })
+    }
+
+    const id = `tk_${randomUUID().slice(0, 8)}`
+    const releaseAwake = this.acquireAwake()
+    const item: PendingTakeover = {
+      id,
+      sessionID: input.sessionID,
+      reason: input.reason,
+      app: input.app,
+      createdAt: Date.now(),
+    }
+
+    this.pending.set(input.sessionID, {
+      ...item,
+      releaseAwake,
+    })
+
+    this.emitRequested(item)
+    return item
   }
 
   waitForHuman(input: {
@@ -55,9 +96,8 @@ export class TakeoverManager {
     readonly signal?: AbortSignal
   }): { readonly item: PendingTakeover; readonly promise: Promise<string | undefined> } {
     // Resolve any stale takeover on the same session before registering a new one
-    const existing = this.pending.get(input.sessionID)
-    if (existing) {
-      this.resolveBySession(input.sessionID, "Superseded by newer takeover request")
+    if (this.pending.has(input.sessionID)) {
+      this.resolveBySession(input.sessionID, "Superseded by newer takeover request", { source: "superseded" })
     }
 
     const id = `tk_${randomUUID().slice(0, 8)}`
@@ -95,6 +135,11 @@ export class TakeoverManager {
       input.signal?.addEventListener("abort", onAbort, { once: true })
     })
 
+    this.emitRequested(item)
+    return { item, promise }
+  }
+
+  private emitRequested(item: PendingTakeover): void {
     for (const cb of this.onRequestCallbacks) {
       try {
         cb(item)
@@ -102,11 +147,13 @@ export class TakeoverManager {
         // Ignore listener errors.
       }
     }
-
-    return { item, promise }
   }
 
-  resolveBySession(sessionID?: string, note?: string): PendingTakeover[] {
+  resolveBySession(
+    sessionID?: string,
+    note?: string,
+    options?: { readonly source?: TakeoverResolveSource },
+  ): PendingTakeover[] {
     const targets = sessionID
       ? (() => {
           const single = this.pending.get(sessionID)
@@ -118,18 +165,12 @@ export class TakeoverManager {
     for (const entry of targets) {
       this.pending.delete(entry.sessionID)
       entry.releaseAwake()
-      const publicItem: PendingTakeover = {
-        id: entry.id,
-        sessionID: entry.sessionID,
-        reason: entry.reason,
-        app: entry.app,
-        createdAt: entry.createdAt,
-      }
+      const publicItem = toPublic(entry)
       resolvedItems.push(publicItem)
-      entry.resolve(note)
+      entry.resolve?.(note)
       for (const cb of this.onResolveCallbacks) {
         try {
-          cb(publicItem, note)
+          cb(publicItem, note, options?.source)
         } catch {
           // Ignore listener errors.
         }
@@ -141,7 +182,7 @@ export class TakeoverManager {
   dispose(): void {
     for (const entry of this.pending.values()) {
       entry.releaseAwake()
-      entry.reject(new Error("Plugin unloaded"))
+      entry.reject?.(new Error("Plugin unloaded"))
     }
     this.pending.clear()
   }

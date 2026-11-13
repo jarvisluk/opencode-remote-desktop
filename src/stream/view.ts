@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
@@ -59,7 +59,14 @@ const ZOOM_MAX = 4
  * plugin RPC, so it works wherever the OpenCode server itself is reachable (LAN, OpenTunnel, ...).
  * Calls `onUnavailable` when WebRTC cannot be established so the caller can fall back to JPEG polling.
  */
-export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (reason: string) => void }): JSX.Element {
+export function LiveStreamView(props: {
+  session: any
+  ui: Ui
+  takeoverReason?: () => string
+  onResolveTakeover?: () => void
+  onUnavailable: (reason: string) => void
+}): JSX.Element {
+  const curSession = () => (typeof props.session === "function" ? props.session() : props.session)
   const [status, setStatus] = createSignal("connecting")
   const [connected, setConnected] = createSignal(false)
   const [takeover, setTakeover] = createSignal("")
@@ -94,7 +101,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     rectDirty = true
   }
 
-  const rpc = () => props.session?.server?.client?.rpc(BotRpc)
+  const rpc = () => curSession()?.server?.client?.rpc(BotRpc)
 
   // ICE between two machines occasionally fails once (e.g. proxy TUN adapters, a sleeping NIC), so retry before
   // dropping to screenshot polling.
@@ -388,24 +395,34 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     }
   }
 
+  const activeTakeover = () => (props.takeoverReason ? props.takeoverReason() : takeover())
+
   const checkTakeovers = async () => {
     try {
+      const s = curSession()
       const list = await rpc()?.listTakeovers({})
-      const mine = list?.items.find((i: any) => !props.session?.id || i.sessionID === props.session.id)
+      const mine = list?.items.find((i: any) => !s?.id || i.sessionID === s.id)
       setTakeover(mine?.reason ?? "")
     } catch {}
   }
 
+  createEffect(() => {
+    curSession()?.id
+    if (!props.takeoverReason) void checkTakeovers()
+  })
+
   onMount(() => {
     void connect().catch((err) => giveUp(err?.message ?? String(err)))
-    void checkTakeovers()
-    takeoverTimer = setInterval(checkTakeovers, 3000)
+    if (!props.takeoverReason) {
+      void checkTakeovers()
+      takeoverTimer = setInterval(checkTakeovers, 3000)
+    }
   })
   onCleanup(() => {
     teardown()
   })
 
-  const server = () => props.session?.server
+  const server = () => curSession()?.server
   const ui = props.ui
   const fill = windowFill(() => root)
 
@@ -499,9 +516,10 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
         ] },
       ]),
     }),
-    () => takeover() ? takeoverCard(ui, takeover, async () => {
-      await rpc()?.resolveTakeover({ sessionID: props.session?.id, note: "User completed action in Live Screen" })
+    () => activeTakeover() ? takeoverCard(ui, activeTakeover, async () => {
+      await rpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
       setTakeover("")
+      props.onResolveTakeover?.()
     }) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
       iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => { setZoom(null); invalidateRect() } }),

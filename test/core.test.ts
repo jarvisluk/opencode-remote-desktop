@@ -6,6 +6,7 @@ import { TakeoverManager } from "../src/takeover/manager.ts"
 import { KeepAwakeController } from "../src/macos/awake.ts"
 import { buildMacOSPath, resolveBinary } from "../src/macos/exec.ts"
 import { getMacDesktopStatus } from "../src/macos/desktop.ts"
+import { registerBotTools } from "../src/tools.ts"
 
 test("options resolver applies sensible defaults", () => {
   const opts = resolveOptions(undefined)
@@ -106,5 +107,106 @@ test("macos exec environment and binary resolution", async () => {
   const status = await getMacDesktopStatus()
   assert.equal(status.platform, "darwin")
   assert.equal(status.supported, true)
-  assert.ok(["granted", "denied", "prompt", "unknown"].includes(status.accessibility))
+  assert.ok(["granted", "denied", "prompt", "unknown", "missing_agent_desktop"].includes(status.accessibility))
+})
+
+test("takeover manager supports non-blocking request, source tracking, and superseding", () => {
+  let awakeCount = 0
+  const manager = new TakeoverManager(() => {
+    awakeCount += 1
+    return () => {
+      awakeCount -= 1
+    }
+  })
+
+  const events: Array<{ type: string; id: string; source?: string; note?: string }> = []
+  manager.onRequested((item) => events.push({ type: "req", id: item.id }))
+  manager.onResolved((item, note, source) => events.push({ type: "res", id: item.id, source, note }))
+
+  const first = manager.request({ sessionID: "ses_abc", reason: "Sign in to Colab", app: "Microsoft Edge" })
+  assert.equal(manager.size, 1)
+  assert.equal(awakeCount, 1)
+  assert.equal(manager.getBySession("ses_abc")?.id, first.id)
+
+  const second = manager.request({ sessionID: "ses_abc", reason: "Confirm 2FA" })
+  assert.equal(manager.size, 1)
+  assert.equal(awakeCount, 1)
+  assert.equal(manager.getBySession("ses_abc")?.id, second.id)
+
+  const resolved = manager.resolveBySession("ses_abc", "Done in Live Screen", { source: "ui" })
+  assert.equal(resolved.length, 1)
+  assert.equal(resolved[0].id, second.id)
+  assert.equal(manager.size, 0)
+  assert.equal(awakeCount, 0)
+  assert.equal(manager.getBySession("ses_abc"), undefined)
+
+  assert.deepEqual(events, [
+    { type: "req", id: first.id },
+    { type: "res", id: first.id, source: "superseded", note: "Superseded by newer takeover request" },
+    { type: "req", id: second.id },
+    { type: "res", id: second.id, source: "ui", note: "Done in Live Screen" },
+  ])
+
+  manager.dispose()
+})
+
+test("computer_request_takeover yields turn immediately and blocks desktop/browser tools while pending", async () => {
+  const registered = new Map<string, any>()
+  const editor = {
+    namespace() {},
+    add(def: any) {
+      registered.set(def.name, def)
+    },
+  } as any
+
+  const manager = new TakeoverManager(() => () => {})
+  const opts = resolveOptions(undefined)
+  registerBotTools(editor, {
+    options: opts,
+    isMac: true,
+    awake: { isHeld: () => false } as any,
+    takeovers: manager,
+    webConsole: { getUrls: () => ["http://127.0.0.1:49375/?token=secret-token&session=ses_1"] } as any,
+    browser: { inspect: async () => ({ mode: "cdp" }), run: async () => ({ ok: true }) } as any,
+    routines: { list: () => [] } as any,
+    permissionAssert: async () => {},
+  })
+
+  const toolCtx = {
+    sessionID: "ses_1",
+    messageID: "msg_1",
+    agent: "build",
+    id: "call_1",
+    signal: new AbortController().signal,
+    progress: async () => {},
+  } as any
+
+  // computer_status should not leak raw token URLs
+  const statusResult = await registered.get("status").execute({}, toolCtx)
+  assert.equal(statusResult.content.includes("secret-token"), false)
+  const parsedStatus = JSON.parse(statusResult.content)
+  assert.equal(parsedStatus.liveScreenAvailable, true)
+  assert.equal(parsedStatus.webConsoleEnabled, true)
+
+  // computer_request_takeover returns immediately without blocking
+  const takeoverResult = await registered
+    .get("request_takeover")
+    .execute({ reason: "请在右侧 Live Screen 登录指定 Google 账号" }, toolCtx)
+  assert.match(takeoverResult.content, /Human takeover requested/)
+  assert.match(takeoverResult.content, /Live Screen/)
+  assert.equal(manager.getBySession("ses_1")?.reason, "请在右侧 Live Screen 登录指定 Google 账号")
+
+  // desktop & browser automation are blocked while takeover is pending on this session
+  const desktopBlocked = await registered.get("desktop").execute({ action: "snapshot" }, toolCtx)
+  assert.match(desktopBlocked.content, /Action blocked: human takeover/)
+
+  const browserBlocked = await registered.get("browser").execute({ action: "snapshot" }, toolCtx)
+  assert.match(browserBlocked.content, /Action blocked: human takeover/)
+
+  // Once resolved, browser tool is no longer blocked by takeover
+  manager.resolveBySession("ses_1", "Done", { source: "ui" })
+  const browserUnblocked = await registered.get("browser").execute({ action: "snapshot" }, toolCtx)
+  assert.equal(browserUnblocked.content.includes("Action blocked: human takeover"), false)
+
+  manager.dispose()
 })

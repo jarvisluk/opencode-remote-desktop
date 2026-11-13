@@ -109,10 +109,10 @@ export function registerBotCommands(
         return
       }
       const note = arg.replace(/^done\s*/i, "").trim() || "User confirmed via /takeover"
-      const resolved = takeovers.resolveBySession(sessionID, note)
+      const resolved = takeovers.resolveBySession(sessionID, note, { source: "command" })
       if (resolved.length === 0) {
         // Also allow resolving any session's pending takeover if invoked from another tab
-        const anyResolved = takeovers.resolveBySession(undefined, note)
+        const anyResolved = takeovers.resolveBySession(undefined, note, { source: "command" })
         await syntheticSessionMessage(
           sessionID,
           anyResolved.length > 0 ? `已恢复 ${anyResolved.length} 个挂起的人工接管任务。` : "当前没有挂起的人工接管任务。",

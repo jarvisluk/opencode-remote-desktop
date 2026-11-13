@@ -34,7 +34,7 @@ export function registerBotTools(
   editor.add({
     name: "status",
     description:
-      "Check macOS host readiness, TCC permissions (Accessibility & Screen Recording), displays, running windows, signed-in browser connection, and remote Web Console URLs.",
+      "Check macOS host readiness, TCC permissions (Accessibility & Screen Recording), displays, running windows, and signed-in browser connection.",
     options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
@@ -61,7 +61,8 @@ export function registerBotTools(
             ...summary.desktop,
             keepAwakeActive: summary.keepAwakeActive,
             browserMode: summary.browserMode,
-            consoleUrls: summary.consoleUrls,
+            liveScreenAvailable: true,
+            webConsoleEnabled: summary.consoleUrls.length > 0,
             activeTakeovers: summary.activeTakeovers,
             routinesCount: summary.routines.length,
             ...(summary.windows ? { windows: summary.windows } : {}),
@@ -169,6 +170,12 @@ export function registerBotTools(
       if (!isMac) {
         return { content: "computer_desktop currently requires a macOS OpenCode Server." }
       }
+      const pendingTakeover = takeovers.getBySession(toolCtx.sessionID)
+      if (pendingTakeover) {
+        return {
+          content: `Action blocked: human takeover (${pendingTakeover.id}: "${pendingTakeover.reason}") is pending on this session. Stop calling tools and end your turn now so the user can complete the action and resume.`,
+        }
+      }
       const input = rawInput as any
       const readOnlyActions = new Set(["snapshot", "find", "list_windows", "list_apps", "list_notifications", "wait"])
       const needsHeaded =
@@ -232,6 +239,12 @@ export function registerBotTools(
       if (!isMac) {
         return { content: "computer_browser currently requires a macOS OpenCode Server." }
       }
+      const pendingTakeover = takeovers.getBySession(toolCtx.sessionID)
+      if (pendingTakeover) {
+        return {
+          content: `Action blocked: human takeover (${pendingTakeover.id}: "${pendingTakeover.reason}") is pending on this session. Stop calling tools and end your turn now so the user can complete the action and resume.`,
+        }
+      }
       const input = rawInput as any
       const readOnly = new Set(["snapshot", "read", "wait"])
 
@@ -262,14 +275,14 @@ export function registerBotTools(
   editor.add({
     name: "request_takeover",
     description:
-      "Pause automation and ask the human user to take over the remote macOS screen for 2FA, QR login, Passkey, CAPTCHA, or payment confirmation. Resumes automatically when the user finishes in the Web Console or replies in chat.",
+      "Hand over the remote macOS screen to the human user for account sign-in, 2FA, QR login, Passkey, CAPTCHA, or payment confirmation. Automatically opens the built-in Live Screen panel with a resume button and yields the current turn; the session resumes automatically when the user clicks resume or replies in chat.",
     options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
       properties: {
         reason: {
           type: "string",
-          description: "Clear explanation shown to the user (e.g. '请在远程画面中完成微信扫码登录')",
+          description: "Clear explanation shown to the user (e.g. '请在右侧画面中切换或登录指定账号')",
         },
         app: {
           type: "string",
@@ -289,25 +302,19 @@ export function registerBotTools(
         }).catch(() => {})
       }
 
-      const urls = webConsole.getUrls(toolCtx.sessionID)
-      const { item, promise } = takeovers.waitForHuman({
+      const item = takeovers.request({
         sessionID: toolCtx.sessionID,
         reason: input.reason,
         app: input.app,
-        signal: toolCtx.signal,
       })
 
-      await toolCtx.progress({
-        status: "waiting_for_human_takeover",
-        takeoverID: item.id,
-        reason: input.reason,
-        consoleUrls: urls,
-        hint: "打开上方链接远程操控 Mac 并点击「已完成操作」，或直接在聊天框回复任意确认消息继续。",
-      })
-
-      const userNote = await promise
       return {
-        content: `Human completed takeover (${item.id})${userNote ? `: "${userNote}"` : ""}. Take a fresh snapshot or screenshot to verify the updated UI state before continuing.`,
+        content: [
+          `Human takeover requested (${item.id}): "${input.reason}".`,
+          `- Built-in Live Screen panel and takeover banner have been triggered automatically for this session.`,
+          `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click「完成并恢复 AI」(or reply in chat) when done.`,
+          `- Do NOT paste standalone Web Console URLs unless the user is on mobile/external browser without Live Screen or asks for a link (they can run /bot anytime).`,
+        ].join("\n"),
       }
     },
   })

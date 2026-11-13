@@ -311,7 +311,7 @@ export class WebTakeoverConsole {
         const body = await readJsonBody(req)
         const sessionID = typeof body.sessionID === "string" && body.sessionID ? body.sessionID : undefined
         const note = typeof body.note === "string" && body.note ? body.note : undefined
-        const resolved = this.takeovers.resolveBySession(sessionID, note)
+        const resolved = this.takeovers.resolveBySession(sessionID, note, { source: "ui" })
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
         res.end(JSON.stringify({ ok: true, resolved: resolved.length }))
         return

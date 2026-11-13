@@ -63,7 +63,12 @@ You have access to fallback \`computer_*\` tools that wrap \`agent-desktop\` / \
 ## Tool Priority Rules
 - **Lower priority than dedicated tools / skills**: When native browser tools (\`browser\`, \`browse\`), MCP browser/desktop servers, or dedicated skills (\`agent-desktop\`, \`agent-browser\`) are available, **prefer those first**.
 - Only use \`computer_desktop\` / \`computer_browser\` when dedicated tools cannot reach the remote host or when explicitly requested.
-- Use \`computer_screenshot\` for host screen capture, \`computer_request_takeover\` when human intervention (QR login, 2FA, Passkey, CAPTCHA) is needed on the remote screen, and \`computer_routine\` for 24/7 host routines.
+- Use \`computer_screenshot\` for host screen capture, \`computer_request_takeover\` when human intervention (login, account switch, QR scan, 2FA, Passkey, CAPTCHA, or payment confirmation) is needed on the remote screen, and \`computer_routine\` for 24/7 host routines.
+
+When calling \`computer_request_takeover\`:
+- OpenCode Desktop automatically opens the built-in **Live Screen** side panel and displays a takeover banner with a resume button.
+- End your turn immediately after calling \`computer_request_takeover\` and briefly tell the user what to complete in **Live Screen** (or reply in chat when done).
+- Do NOT paste standalone Web Console URLs unless the user explicitly asks for an external browser/mobile link (they can run \`/bot\` anytime).
 
 Keep actions safe, concise, and confirm after mutations.
 `
@@ -210,7 +215,7 @@ export default Plugin.define({
       },
       resolveTakeover: async (rawInput) => {
         const input = rawInput as { sessionID?: string; note?: string }
-        const resolved = takeovers.resolveBySession(input.sessionID, input.note)
+        const resolved = takeovers.resolveBySession(input.sessionID, input.note, { source: "ui" })
         return { resolved: resolved.length }
       },
       streamOffer: async (rawInput) => {
@@ -224,7 +229,10 @@ export default Plugin.define({
       },
     })
 
+    const chatResumedTakeovers = new Map<string, { id: string; reason: string }>()
+
     const unsubReq = takeovers.onRequested((item) => {
+      chatResumedTakeovers.delete(item.sessionID)
       void rpcReg.events.emit("takeoverRequested", {
         id: item.id,
         sessionID: item.sessionID,
@@ -232,12 +240,25 @@ export default Plugin.define({
         consoleUrls: webConsole.getUrls(item.sessionID),
       })
     })
-    const unsubRes = takeovers.onResolved((item, note) => {
+    const unsubRes = takeovers.onResolved((item, note, source) => {
       void rpcReg.events.emit("takeoverResolved", {
         id: item.id,
         sessionID: item.sessionID,
         ...(note ? { note } : {}),
       })
+      if (source === "ui" || source === "command") {
+        void ctx.session
+          .synthetic({
+            sessionID: item.sessionID as any,
+            description: "已完成人工接管",
+            text: `Human completed takeover (${item.id}: "${item.reason}")${note ? ` — ${note}` : ""}. Take a fresh snapshot or screenshot to verify the updated UI state before continuing.`,
+            delivery: "queue",
+            resume: true,
+          })
+          .catch((err) => {
+            console.error("[bot] Failed to schedule session resume after takeover:", err)
+          })
+      }
     })
 
     // 2. Permission guardrail hook: escalate high-risk GUI/Browser mutations to interactive Web approval
@@ -253,23 +274,33 @@ export default Plugin.define({
       }
     })
 
-    // 3. Prompt admission hook: if a session is waiting for Human Takeover and the user replies in OpenCode Web/Mobile chat,
-    //    automatically wake up the suspended takeover with the user's message!
+    // 3. Prompt admission hook: if a session is waiting for Human Takeover and the user replies in chat,
+    //    clear the takeover banner and attach a one-shot context hint so the model checks whether the user finished or asked a question.
     const promptHookReg = await ctx.session.hook("prompt", (event) => {
-      const hasPending = takeovers.list().some((t) => t.sessionID === event.sessionID)
-      if (hasPending) {
-        takeovers.resolveBySession(event.sessionID, event.prompt.text)
+      const pending = takeovers.getBySession(event.sessionID)
+      if (pending) {
+        chatResumedTakeovers.set(event.sessionID, { id: pending.id, reason: pending.reason })
+        takeovers.resolveBySession(event.sessionID, event.prompt.text, { source: "chat" })
       }
     })
 
-    // 4. Context hook: inform the model about host Mac capabilities & Web Console availability (WITHOUT secret tokens)
+    // 4. Context hook: inform the model about host Mac capabilities & Live Screen takeover workflow (WITHOUT secret tokens)
     const contextHookReg = await ctx.session.hook("context", (event) => {
-      if (!isMac) return
-      const consoleState = options.consoleEnabled ? "Web Console available (run /bot to get access link)" : "Web Console disabled"
-      event.system.push({
-        type: "text",
-        text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. ${consoleState}`,
-      } as any)
+      if (isMac) {
+        const consoleState = options.consoleEnabled ? "Standalone Web Console also available via /bot." : ""
+        event.system.push({
+          type: "text",
+          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked. ${consoleState}`.trim(),
+        } as any)
+      }
+      const resumed = chatResumedTakeovers.get(event.sessionID)
+      if (resumed) {
+        chatResumedTakeovers.delete(event.sessionID)
+        event.system.push({
+          type: "text",
+          text: `[Bot Takeover Update] Pending takeover ${resumed.id} ("${resumed.reason}") ended because the user sent a chat message. Check the user's message: if they confirmed completion, take a fresh screenshot or snapshot to verify and continue; if they asked a question or have not finished yet, answer them and call \`computer_request_takeover\` again if they still need screen control.`,
+        } as any)
+      }
     })
 
     // 5. Embedded Operator Skill
@@ -294,7 +325,7 @@ export default Plugin.define({
         takeovers,
         routines,
         syntheticSessionMessage: async (sessionID, text) => {
-          await ctx.session.synthetic({ sessionID, text })
+          await ctx.session.synthetic({ sessionID: sessionID as any, text, resume: false })
         },
         promptSession: async (params) => {
           await ctx.session.prompt(params)
