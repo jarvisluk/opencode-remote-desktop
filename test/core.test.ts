@@ -108,3 +108,20 @@ test("macos exec environment and binary resolution", async () => {
   assert.equal(status.supported, true)
   assert.ok(["granted", "denied", "prompt", "unknown"].includes(status.accessibility))
 })
+
+test("preflight formatter renders every issue with component, problem and hint", async () => {
+  const { formatPreflightIssues } = await import("../src/preflight.ts")
+  const text = formatPreflightIssues([
+    { component: "agent-desktop", problem: "CLI 未安装（PATH 未找到）", hint: "npm install -g agent-desktop" },
+    { component: "实时画面 sidecar", problem: "dist/bin 原生二进制缺失", hint: "npm run build:native" },
+  ])
+  assert.match(text, /- \*\*agent-desktop\*\*: CLI 未安装/)
+  assert.match(text, /npm install -g agent-desktop/)
+  assert.match(text, /- \*\*实时画面 sidecar\*\*: dist\/bin 原生二进制缺失/)
+  assert.ok(text.split("\n").length === 2)
+})
+
+test("preflight formatter handles empty issue list", async () => {
+  const { formatPreflightIssues } = await import("../src/preflight.ts")
+  assert.equal(formatPreflightIssues([]), "")
+})

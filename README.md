@@ -82,6 +82,7 @@
 ### 斜杠命令 (Slash Commands)
 - `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。
 - `/bot`: 查看 Bot 状态与 Web 控制台入口。
+- `/doctor`: 宿主机依赖体检（agent CLI 及版本、原生 sidecar、TCC 权限），给出修复建议。
 - `/takeover`: 手动挂起会话并请求人类接管。
 - `/routine`: 列出或管理例行任务。
 
@@ -90,10 +91,21 @@
 ## 🚀 安装与配置 (Installation)
 
 ### 1. 确保宿主机环境已安装依赖
-macOS 宿主机推荐安装 `agent-desktop` 与 `agent-browser`：
+macOS 宿主机需要安装 `agent-desktop` 与 `agent-browser`（vercel-labs 开源 CLI）：
 ```bash
-# 确认 agent-desktop 已安装并授予了辅助功能与屏幕录制权限
-agent-desktop check
+# 安装两个 CLI（npm 全局装或 brew 均可）
+npm install -g agent-desktop agent-browser
+# 首次使用 agent-browser 需下载 Chrome for Testing
+agent-browser install
+# 按交互引导授予 macOS 辅助功能与屏幕录制权限
+agent-desktop permissions --guide
+```
+
+安装完成后在 OpenCode 中运行 `/doctor` 一键体检：CLI 是否就绪及版本、TCC 权限、原生直播 sidecar、浏览器连接模式，缺什么会直接给出修复命令。
+
+启用 WebRTC 低延迟直播（可选，否则自动降级为 JPEG 轮询）：
+```bash
+npm run build:native   # 需要 Go 与 swiftc
 ```
 
 ### 2. 在 OpenCode 配置文件中注册插件

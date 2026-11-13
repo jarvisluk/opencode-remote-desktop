@@ -15,8 +15,10 @@ import { WebTakeoverConsole } from "./takeover/web-console.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
+import { collectDiagnostics, startupWarnings } from "./diagnostics.ts"
 import { registerBotTools } from "./tools.ts"
 import { registerBotCommands } from "./commands.ts"
+import { collectPreflightIssues, formatPreflightIssues } from "./preflight.ts"
 
 // Match keywords on word boundaries for Latin words, or literal substring for Chinese characters
 const HIGH_RISK_KEYWORDS = [
@@ -84,12 +86,29 @@ export default Plugin.define({
       : null
 
     if (isMac) {
+      // Dependency probe: surface missing CLIs / unbuilt sidecar at startup instead of first tool failure.
+      try {
+        for (const warning of startupWarnings(await collectDiagnostics())) console.warn(warning)
+      } catch {
+        // Diagnostics must never block plugin startup.
+      }
       try {
         await webConsole.start()
       } catch (err) {
         console.error("[bot] Failed to start WebTakeoverConsole, disabling web console feature:", err)
       }
       routines.start()
+      // Startup dependency preflight: surface missing CLIs / permissions / native helpers
+      // immediately instead of on the first failing tool call.
+      const preflightIssues = await collectPreflightIssues().catch((err) => {
+        console.error("[bot] Preflight check failed:", err)
+        return []
+      })
+      if (preflightIssues.length > 0) {
+        console.warn(
+          `[bot] Preflight found ${preflightIssues.length} issue(s):\n` + formatPreflightIssues(preflightIssues),
+        )
+      }
     }
 
     // 1. Cross-network RPC registration (usable by @opencode/client, TUI, Desktop, or external scripts)

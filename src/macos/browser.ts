@@ -63,7 +63,9 @@ export class MacBrowserController {
   async ensureConnected(signal?: AbortSignal): Promise<{ readonly mode: string; readonly warning?: string }> {
     const bin = resolveBinary("agent-browser")
     if (!bin) {
-      throw new Error("agent-browser is not installed on this macOS server.")
+      throw new Error(
+        "agent-browser is not installed on this macOS server. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
+      )
     }
 
     if (!this.reuseHostBrowser) {
@@ -107,7 +109,8 @@ export class MacBrowserController {
     if (!bin) {
       return {
         ok: false,
-        output: "agent-browser binary not found on macOS PATH.",
+        output:
+          "agent-browser binary not found on macOS PATH. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
         mode: "missing",
       }
     }

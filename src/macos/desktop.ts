@@ -381,7 +381,7 @@ export async function runAgentDesktop(
   if (!bin) {
     return {
       ok: false,
-      raw: "agent-desktop is not installed. Install it via Homebrew or place it in /opt/homebrew/bin.",
+      raw: "agent-desktop is not installed. Install it with `npm install -g agent-desktop` (or `brew install agent-desktop`), then run `agent-desktop permissions --guide` to grant Accessibility & Screen Recording.",
       parsed: null,
     }
   }
