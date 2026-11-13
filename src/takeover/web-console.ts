@@ -11,6 +11,8 @@ import {
 } from "../macos/desktop.ts"
 import type { StreamSidecar } from "../stream/sidecar.ts"
 import type { TakeoverManager } from "./manager.ts"
+import { normalizeLocale, parseAcceptLanguage, resolveLocale, toBcp47, type SupportedLocale } from "../i18n/locale.ts"
+import { WEB_CONSOLE_I18N } from "../i18n/web-console.ts"
 
 const COOKIE_NAME = "bot_auth"
 
@@ -185,13 +187,21 @@ export class WebTakeoverConsole {
     return { ok: false, fromQuery: false }
   }
 
+  private resolveRequestLocale(req: IncomingMessage, url: URL): SupportedLocale {
+    const queryLang = url.searchParams.get("lang")
+    if (queryLang) return normalizeLocale(queryLang)
+    if (this.options.locale !== "auto") return this.options.locale
+    return parseAcceptLanguage(req.headers["accept-language"]) ?? resolveLocale(this.options.locale)
+  }
+
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`)
+      const reqLocale = this.resolveRequestLocale(req, url)
       const auth = this.isAuthenticated(req, url)
       if (!auth.ok) {
         res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" })
-        res.end("Unauthorized: open this console using the signed link from OpenCode.")
+        res.end(WEB_CONSOLE_I18N[reqLocale].unauthorized)
         return
       }
 
@@ -207,7 +217,7 @@ export class WebTakeoverConsole {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "no-store",
         })
-        res.end(CONSOLE_HTML)
+        res.end(renderConsoleHtml(reqLocale))
         return
       }
 
@@ -326,14 +336,19 @@ export class WebTakeoverConsole {
   }
 }
 
-const CONSOLE_HTML = `<!doctype html>
-<html lang="zh-CN">
+export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string {
+  const s = WEB_CONSOLE_I18N[defaultLocale] ?? WEB_CONSOLE_I18N.en
+  const htmlLang = toBcp47(defaultLocale)
+  const dictJson = JSON.stringify(WEB_CONSOLE_I18N).replace(/</g, "\\u003c")
+  const localeJson = JSON.stringify(defaultLocale)
+  return `<!doctype html>
+<html lang="${htmlLang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#000000" />
-  <title>Mac 远程控制 · OpenCode</title>
+  <title>${s.pageTitle}</title>
   <style>
     :root {
       color-scheme: dark;
@@ -641,86 +656,88 @@ const CONSOLE_HTML = `<!doctype html>
   <div id="stage">
     <div id="screenWrap" data-mode="click">
       <video id="screenVideo" autoplay muted playsinline tabindex="0" hidden></video>
-      <img id="screenImg" alt="Mac 实时画面" />
-      <div class="placeholder" id="placeholder">正在连接 Mac…</div>
+      <img id="screenImg" data-i18n-alt="screenAlt" alt="${s.screenAlt}" />
+      <div class="placeholder" id="placeholder" data-i18n="connectingMac">${s.connectingMac}</div>
     </div>
   </div>
 
   <div id="handle" class="glass" data-idle="false">
-    <div class="status-pill" title="连接状态">
+    <div class="status-pill" data-i18n-title="connectionStatusTitle" title="${s.connectionStatusTitle}">
       <span class="status-dot" id="statusDot"></span>
-      <span id="statusText">连接中…</span>
+      <span id="statusText" data-i18n="connecting">${s.connecting}</span>
     </div>
-    <button class="icon-btn" id="dockToggle" type="button" title="键盘与输入 (Ctrl+K)" aria-label="键盘与输入" aria-pressed="false">
+    <button class="icon-btn" id="dockToggle" type="button" data-i18n-title="dockTitle" data-i18n-aria="dockAria" title="${s.dockTitle}" aria-label="${s.dockAria}" aria-pressed="false">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8h1M9.5 8h1M13.5 8h1M6.5 12h7"/></svg>
     </button>
-    <button class="icon-btn" id="topToggle" type="button" title="工具栏 (Ctrl+.)" aria-label="工具栏" aria-pressed="false">
+    <button class="icon-btn" id="topToggle" type="button" data-i18n-title="topTitle" data-i18n-aria="topAria" title="${s.topTitle}" aria-label="${s.topAria}" aria-pressed="false">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 10h12M4 14h12"/></svg>
     </button>
   </div>
 
   <header id="topbar" class="glass">
-    <div class="segmented" id="modeBar" role="group" aria-label="点击方式">
-      <button type="button" data-mode="click" aria-pressed="true">单击</button>
-      <button type="button" data-mode="double_click" aria-pressed="false">双击</button>
-      <button type="button" data-mode="right_click" aria-pressed="false">右键</button>
-      <button type="button" data-mode="view" aria-pressed="false">只看</button>
+    <div class="segmented" id="modeBar" role="group" data-i18n-aria="modeAria" aria-label="${s.modeAria}">
+      <button type="button" data-mode="click" data-i18n="modeClick" aria-pressed="true">${s.modeClick}</button>
+      <button type="button" data-mode="double_click" data-i18n="modeDoubleClick" aria-pressed="false">${s.modeDoubleClick}</button>
+      <button type="button" data-mode="right_click" data-i18n="modeRightClick" aria-pressed="false">${s.modeRightClick}</button>
+      <button type="button" data-mode="view" data-i18n="modeView" aria-pressed="false">${s.modeView}</button>
     </div>
     <span class="vsep"></span>
-    <select class="select" id="windowSelect" aria-label="画面来源"><option value="">整个屏幕</option></select>
-    <select class="select" id="fpsSelect" aria-label="刷新频率">
-      <option value="webrtc" selected>WebRTC 实时</option>
-      <option value="-1">JPEG 连续 (最快)</option>
-      <option value="500">JPEG 每秒 2 帧</option>
-      <option value="1000">JPEG 每秒 1 帧</option>
-      <option value="0">手动刷新</option>
+    <select class="select" id="windowSelect" data-i18n-aria="windowAria" aria-label="${s.windowAria}"><option value="" data-i18n="entireScreen">${s.entireScreen}</option></select>
+    <select class="select" id="fpsSelect" data-i18n-aria="fpsAria" aria-label="${s.fpsAria}">
+      <option value="webrtc" data-i18n="fpsWebrtc" selected>${s.fpsWebrtc}</option>
+      <option value="-1" data-i18n="fpsJpegFast">${s.fpsJpegFast}</option>
+      <option value="500" data-i18n="fpsJpeg2">${s.fpsJpeg2}</option>
+      <option value="1000" data-i18n="fpsJpeg1">${s.fpsJpeg1}</option>
+      <option value="0" data-i18n="fpsManual">${s.fpsManual}</option>
     </select>
-    <button class="icon-btn" id="refreshBtn" type="button" title="刷新画面" aria-label="刷新画面">
+    <button class="icon-btn" id="refreshBtn" type="button" data-i18n-title="refreshTitle" data-i18n-aria="refreshTitle" title="${s.refreshTitle}" aria-label="${s.refreshTitle}">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3h-3"/></svg>
     </button>
-    <button class="icon-btn" id="fullscreenBtn" type="button" title="浏览器全屏" aria-label="浏览器全屏">
+    <button class="icon-btn" id="fullscreenBtn" type="button" data-i18n-title="fullscreenTitle" data-i18n-aria="fullscreenTitle" title="${s.fullscreenTitle}" aria-label="${s.fullscreenTitle}">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5v-4h4M16.5 7.5v-4h-4M3.5 12.5v4h4M16.5 12.5v4h-4"/></svg>
     </button>
-    <button class="icon-btn" id="topClose" type="button" title="收起工具栏" aria-label="收起工具栏">
+    <button class="icon-btn" id="topClose" type="button" data-i18n-title="topCloseTitle" data-i18n-aria="topCloseTitle" title="${s.topCloseTitle}" aria-label="${s.topCloseTitle}">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l5-5 5 5"/></svg>
     </button>
   </header>
 
   <div id="takeoverBanner" class="glass" role="alert">
     <span class="warn">●</span>
-    <p id="takeoverReason">AI 在等你完成一步操作</p>
-    <button class="btn-primary" id="resumeBtn" type="button">完成，交还 AI</button>
+    <p id="takeoverReason" data-i18n="takeoverDefaultReason">${s.takeoverDefaultReason}</p>
+    <button class="btn-primary" id="resumeBtn" type="button" data-i18n="resumeBtn">${s.resumeBtn}</button>
   </div>
 
   <div id="dock" class="glass">
     <form id="textForm">
-      <input id="textInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="输入文字发送到 Mac 当前光标处" />
-      <button class="send-btn" id="sendBtn" type="submit" title="发送" aria-label="发送" disabled>
+      <input id="textInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-placeholder="textPlaceholder" placeholder="${s.textPlaceholder}" />
+      <button class="send-btn" id="sendBtn" type="submit" data-i18n-title="sendTitle" data-i18n-aria="sendTitle" title="${s.sendTitle}" aria-label="${s.sendTitle}" disabled>
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg>
       </button>
-      <button class="icon-btn" id="dockClose" type="button" title="收起" aria-label="收起输入">
+      <button class="icon-btn" id="dockClose" type="button" data-i18n-title="dockCloseTitle" data-i18n-aria="dockCloseAria" title="${s.dockCloseTitle}" aria-label="${s.dockCloseAria}">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l5 5 5-5"/></svg>
       </button>
     </form>
     <div class="keys" id="keyBar">
-      <button class="key" type="button" data-key="return" title="回车">⏎ Return</button>
-      <button class="key" type="button" data-key="escape" title="Esc">Esc</button>
-      <button class="key" type="button" data-key="tab" title="Tab">⇥ Tab</button>
-      <button class="key" type="button" data-key="delete" title="退格">⌫</button>
-      <button class="key" type="button" data-key="space" title="空格">Space</button>
+      <button class="key" type="button" data-key="return" data-i18n-title="keyReturnTitle" data-i18n="keyReturnText" title="${s.keyReturnTitle}">${s.keyReturnText}</button>
+      <button class="key" type="button" data-key="escape" data-i18n-title="keyEscTitle" title="${s.keyEscTitle}">Esc</button>
+      <button class="key" type="button" data-key="tab" data-i18n-title="keyTabTitle" title="${s.keyTabTitle}">⇥ Tab</button>
+      <button class="key" type="button" data-key="delete" data-i18n-title="keyBackspaceTitle" title="${s.keyBackspaceTitle}">⌫</button>
+      <button class="key" type="button" data-key="space" data-i18n-title="keySpaceTitle" data-i18n="keySpaceText" title="${s.keySpaceTitle}">${s.keySpaceText}</button>
       <span class="vsep"></span>
-      <button class="key" type="button" data-key="cmd+c" title="复制">⌘C</button>
-      <button class="key" type="button" data-key="cmd+v" title="粘贴">⌘V</button>
+      <button class="key" type="button" data-key="cmd+c" data-i18n-title="keyCopyTitle" title="${s.keyCopyTitle}">⌘C</button>
+      <button class="key" type="button" data-key="cmd+v" data-i18n-title="keyPasteTitle" title="${s.keyPasteTitle}">⌘V</button>
       <span class="vsep"></span>
-      <button class="key" type="button" data-key="up" title="上箭头">↑</button>
-      <button class="key" type="button" data-key="down" title="下箭头">↓</button>
-      <button class="key" type="button" id="scrollUpBtn" title="向上滚动">滚动 ↑</button>
-      <button class="key" type="button" id="scrollDownBtn" title="向下滚动">滚动 ↓</button>
+      <button class="key" type="button" data-key="up" data-i18n-title="keyUpTitle" title="${s.keyUpTitle}">↑</button>
+      <button class="key" type="button" data-key="down" data-i18n-title="keyDownTitle" title="${s.keyDownTitle}">↓</button>
+      <button class="key" type="button" id="scrollUpBtn" data-i18n-title="scrollUpTitle" data-i18n="scrollUpText" title="${s.scrollUpTitle}">${s.scrollUpText}</button>
+      <button class="key" type="button" id="scrollDownBtn" data-i18n-title="scrollDownTitle" data-i18n="scrollDownText" title="${s.scrollDownTitle}">${s.scrollDownText}</button>
     </div>
   </div>
 
   <script>
     (() => {
+      const I18N = ${dictJson};
+      const DEFAULT_LOCALE = ${localeJson};
       const params = new URLSearchParams(location.search);
       const targetSession = params.get("session") || "";
       if (params.has("token")) {
@@ -728,6 +745,34 @@ const CONSOLE_HTML = `<!doctype html>
         const clean = location.pathname + (params.toString() ? "?" + params.toString() : "");
         history.replaceState(null, "", clean);
       }
+
+      function normalizeLang(raw) {
+        if (!raw) return null;
+        const clean = String(raw).split(".")[0].trim().toLowerCase().replace(/_/g, "-");
+        if (clean === "zht" || clean === "zh-hant" || clean.startsWith("zh-hant-") || clean === "zh-tw" || clean === "zh-hk" || clean === "zh-mo") return "zht";
+        if (clean === "zh" || clean.startsWith("zh-")) return "zh";
+        if (clean === "en" || clean.startsWith("en-")) return "en";
+        return null;
+      }
+
+      const locale = normalizeLang(params.get("lang")) || DEFAULT_LOCALE || "en";
+      const msgs = I18N[locale] || I18N.en;
+      document.documentElement.lang = locale === "zh" ? "zh-CN" : locale === "zht" ? "zh-TW" : "en-US";
+      document.title = msgs.pageTitle;
+
+      function t(key, vars) {
+        let str = msgs[key] || I18N.en[key] || key;
+        if (vars) {
+          str = str.replace(/\\{\\{(\\w+)\\}\\}/g, (_, k) => (k in vars ? String(vars[k]) : ""));
+        }
+        return str;
+      }
+
+      document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+      document.querySelectorAll("[data-i18n-title]").forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+      document.querySelectorAll("[data-i18n-aria]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.i18nAria)); });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+      document.querySelectorAll("[data-i18n-alt]").forEach((el) => { el.alt = t(el.dataset.i18nAlt); });
 
       const $ = (id) => document.getElementById(id);
       const video = $("screenVideo");
@@ -836,7 +881,7 @@ const CONSOLE_HTML = `<!doctype html>
 
       function fallbackToJpeg(reason) {
         if (fpsSelect.value === "webrtc") fpsSelect.value = "-1";
-        if (reason) setStatus("已切换截图模式：" + reason, "online");
+        if (reason) setStatus(t("switchedToJpeg", { reason }), "online");
         scheduleLoop();
       }
 
@@ -848,7 +893,7 @@ const CONSOLE_HTML = `<!doctype html>
         closeWebRtc(true);
         const gen = ++rtcGen;
         const started = performance.now();
-        setStatus("WebRTC 连接中…", "busy");
+        setStatus(t("webrtcConnecting"), "busy");
 
         const peer = new RTCPeerConnection();
         pc = peer;
@@ -879,10 +924,10 @@ const CONSOLE_HTML = `<!doctype html>
             if (++rtcAttempt < 2) {
               setTimeout(() => { if (gen === rtcGen) startWebRtc(); }, 500);
             } else {
-              fallbackToJpeg("直连失败");
+              fallbackToJpeg(t("webrtcDirectFailed"));
             }
           } else if (s === "disconnected") {
-            setStatus("WebRTC 重连中…", "busy");
+            setStatus(t("webrtcReconnecting"), "busy");
           }
         };
 
@@ -890,20 +935,20 @@ const CONSOLE_HTML = `<!doctype html>
           await peer.setLocalDescription(await peer.createOffer());
           await new Promise((resolve) => {
             if (peer.iceGatheringState === "complete") return resolve();
-            let t = null;
+            let tm = null;
             const finish = () => {
               peer.removeEventListener("icegatheringstatechange", onState);
-              clearTimeout(t);
+              clearTimeout(tm);
               resolve();
             };
             const onState = () => { if (peer.iceGatheringState === "complete") finish(); };
             peer.addEventListener("icegatheringstatechange", onState);
-            t = setTimeout(finish, 400);
+            tm = setTimeout(finish, 400);
           });
           if (gen !== rtcGen) return;
           const offerSdp = (peer.localDescription && peer.localDescription.sdp) || "";
           if (!/^a=candidate:/m.test(offerSdp)) {
-            return fallbackToJpeg("当前浏览器未开放 WebRTC 候选");
+            return fallbackToJpeg(t("webrtcNoCandidates"));
           }
 
           const res = await fetch("/api/stream/offer", {
@@ -913,7 +958,7 @@ const CONSOLE_HTML = `<!doctype html>
           });
           if (res.status === 503) {
             streamAvailable = false;
-            return fallbackToJpeg("服务端未启用流媒体");
+            return fallbackToJpeg(t("webrtcServerDisabled"));
           }
           if (!res.ok) throw new Error("HTTP " + res.status);
           const ans = await res.json();
@@ -931,7 +976,7 @@ const CONSOLE_HTML = `<!doctype html>
           clearTimeout(rtcConnectTimer);
           rtcConnectTimer = setTimeout(() => {
             if (gen === rtcGen && peer.connectionState !== "connected") {
-              fallbackToJpeg("连接超时");
+              fallbackToJpeg(t("webrtcTimeout"));
             }
           }, 3500);
 
@@ -953,7 +998,7 @@ const CONSOLE_HTML = `<!doctype html>
             } catch {}
           }, 1000);
         } catch (err) {
-          if (gen === rtcGen) fallbackToJpeg(err && err.message ? err.message : "信令异常");
+          if (gen === rtcGen) fallbackToJpeg(err && err.message ? err.message : t("webrtcSignalingError"));
         }
       }
 
@@ -1036,7 +1081,7 @@ const CONSOLE_HTML = `<!doctype html>
           const ms = Math.round(performance.now() - t0);
           if (statusDot.dataset.state !== "busy") setStatus("JPEG · " + Math.round(logical.w) + " × " + Math.round(logical.h) + " · " + ms + " ms", "online");
         } catch (e) {
-          setStatus("画面获取失败：" + e.message, "error");
+          setStatus(t("frameFetchFailed", { error: e.message }), "error");
         } finally {
           inFlight = false;
         }
@@ -1054,13 +1099,12 @@ const CONSOLE_HTML = `<!doctype html>
           }
           if (document.activeElement !== windowSelect) {
             const currentVal = windowSelect.value;
-            const opts = ['<option value="">整个屏幕</option>'];
+            const esc = (str) => String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const opts = ['<option value="">' + esc(t("entireScreen")) + "</option>"];
             for (const w of data.windows || []) {
-              const label = (w.title && w.title !== w.appName ? w.appName + "：" + w.title : w.appName).slice(0, 48);
+              const label = (w.title && w.title !== w.appName ? w.appName + ": " + w.title : w.appName).slice(0, 48);
               const sel = w.id === currentVal ? " selected" : "";
-              const safeId = String(w.id).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-              const safeLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-              opts.push('<option value="' + safeId + '"' + sel + ">" + safeLabel + "</option>");
+              opts.push('<option value="' + esc(w.id) + '"' + sel + ">" + esc(label) + "</option>");
             }
             windowSelect.innerHTML = opts.join("");
           }
@@ -1111,7 +1155,7 @@ const CONSOLE_HTML = `<!doctype html>
         if (payload.kind === "type" && payload.text && sendDc({ t: "text", s: payload.text })) {
           return;
         }
-        setStatus("发送中…", "busy");
+        setStatus(t("sending"), "busy");
         wake();
         try {
           const res = await fetch("/api/input", {
@@ -1120,10 +1164,10 @@ const CONSOLE_HTML = `<!doctype html>
             body: JSON.stringify(payload),
           });
           const out = await res.json();
-          setStatus(out.ok ? (out.detail || "已发送") : "失败：" + (out.detail || ""), out.ok ? "online" : "error");
+          setStatus(out.ok ? (out.detail || t("sent")) : t("sendFailedPrefix", { detail: out.detail || "" }), out.ok ? "online" : "error");
           if (fpsSelect.value !== "webrtc") setTimeout(fetchFrame, 120);
         } catch (e) {
-          setStatus("发送失败：" + e.message, "error");
+          setStatus(t("sendError", { error: e.message }), "error");
         }
       }
 
@@ -1352,7 +1396,7 @@ const CONSOLE_HTML = `<!doctype html>
           body: JSON.stringify({ sessionID: sid, note: "User completed takeover via Web Console" }),
         });
         await fetchState();
-        setStatus("已交还 AI", "online");
+        setStatus(t("handedBackToAi"), "online");
       });
 
       fetchState().then(() => {
@@ -1370,3 +1414,4 @@ const CONSOLE_HTML = `<!doctype html>
 </body>
 </html>
 `
+}

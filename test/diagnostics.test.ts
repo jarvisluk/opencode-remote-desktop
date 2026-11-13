@@ -39,11 +39,17 @@ test("startupWarnings reports missing CLI, stale version, and unbuilt sidecar", 
     { name: "agent-desktop", installed: false, minimumVersion: "1.1.0", installHint: "npm install -g agent-desktop" },
     { name: "agent-browser", installed: true, version: "0.30.0", versionOk: false, minimumVersion: "0.41.1", installHint: "npm install -g agent-browser" },
   ]
-  const warnings = startupWarnings(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }))
-  assert.equal(warnings.length, 3)
-  assert.match(warnings[0], /agent-desktop.*CLI 未安装/)
-  assert.match(warnings[1], /低于已验证版本 0\.41\.1/)
-  assert.match(warnings[2], /build:native/)
+  const zhWarnings = startupWarnings(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }), "zh")
+  assert.equal(zhWarnings.length, 3)
+  assert.match(zhWarnings[0], /agent-desktop.*CLI 未安装/)
+  assert.match(zhWarnings[1], /低于已验证版本 0\.41\.1/)
+  assert.match(zhWarnings[2], /build:native/)
+
+  const enWarnings = startupWarnings(report({ dependencies: deps, stream: { backend: null, reason: "not built" } }), "en")
+  assert.equal(enWarnings.length, 3)
+  assert.match(enWarnings[0], /agent-desktop.*CLI not installed/)
+  assert.match(enWarnings[1], /below verified minimum 0\.41\.1/)
+  assert.match(enWarnings[2], /build:native/)
 })
 
 test("startupWarnings is empty when everything is healthy", () => {
@@ -51,30 +57,39 @@ test("startupWarnings is empty when everything is healthy", () => {
     { name: "agent-desktop", installed: true, version: "1.1.0", versionOk: true },
     { name: "agent-browser", installed: true, version: "0.41.1", versionOk: true },
   ]
-  assert.deepEqual(startupWarnings(report({ dependencies: deps })), [])
+  assert.deepEqual(startupWarnings(report({ dependencies: deps }), "en"), [])
 })
 
 test("formatDoctorReport renders missing dependencies with fix hints", () => {
   const deps: readonly DependencyCheck[] = [
     { name: "agent-desktop", installed: false, minimumVersion: "1.1.0", installHint: "npm install -g agent-desktop" },
   ]
-  const text = formatDoctorReport(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }))
-  assert.match(text, /agent-desktop.*✖ 未安装/)
-  assert.match(text, /npm install -g agent-desktop/)
-  assert.match(text, /直播后端.*✖ 不可用/)
+  const zhText = formatDoctorReport(report({ dependencies: deps, stream: { backend: null, reason: "未构建" } }), "zh")
+  assert.match(zhText, /agent-desktop.*✖ 未安装/)
+  assert.match(zhText, /npm install -g agent-desktop/)
+  assert.match(zhText, /直播后端.*✖ 不可用/)
+
+  const enText = formatDoctorReport(report({ dependencies: deps, stream: { backend: null, reason: "not built" } }), "en")
+  assert.match(enText, /agent-desktop.*✖ Not installed/)
+  assert.match(enText, /npm install -g agent-desktop/)
+  assert.match(enText, /Live Stream Backend.*✖ Unavailable/)
 })
 
 test("formatDoctorReport short-circuits on non-mac platforms", () => {
-  const text = formatDoctorReport(report({ platform: "linux", isMac: false, stream: { backend: "ffmpeg" } }))
-  assert.match(text, /linux/)
-  assert.match(text, /仅支持 macOS/)
-  assert.match(text, /直播后端.*⚠ FFmpeg/)
+  const zhText = formatDoctorReport(report({ platform: "linux", isMac: false, stream: { backend: "ffmpeg" } }), "zh")
+  assert.match(zhText, /linux/)
+  assert.match(zhText, /仅支持 macOS/)
+  assert.match(zhText, /直播后端.*⚠ FFmpeg/)
+
+  const zhtText = formatDoctorReport(report({ platform: "linux", isMac: false, stream: { backend: "ffmpeg" } }), "zht")
+  assert.match(zhtText, /僅支援 macOS/)
+  assert.match(zhtText, /直播後端.*⚠ FFmpeg/)
 })
 
 test("startupWarnings and doctor surface the ffmpeg backend tradeoff", () => {
   const r = report({ stream: { backend: "ffmpeg" } })
-  const warnings = startupWarnings(r)
+  const warnings = startupWarnings(r, "zh")
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /FFmpeg 直播.*键鼠注入/)
-  assert.match(formatDoctorReport(r), /直播后端.*⚠ FFmpeg/)
+  assert.match(formatDoctorReport(r, "zh"), /直播后端.*⚠ FFmpeg/)
 })

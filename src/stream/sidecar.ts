@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+import type { SupportedLocale } from "../i18n/locale.ts"
 import { buildFfmpegArgs, findFfmpeg, pickStreamBackend, type BackendProbe, type StreamBackendPreference } from "./ffmpeg.ts"
 
 const binDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
@@ -45,13 +46,16 @@ export class StreamSidecar {
   }
 
   /** Probes the chosen capture backend (native binaries vs ffmpeg on PATH). */
-  static probe(options: Pick<StreamOptions, "backend" | "ffmpegInputArgs"> = {}): BackendProbe {
-    return pickStreamBackend({
-      preference: options.backend ?? "auto",
-      platform: process.platform,
-      nativeBinariesAvailable: existsSync(binary("bot-stream")) && existsSync(binary("bot-capture")),
-      ffmpegPath: findFfmpeg(),
-    })
+  static probe(options: Pick<StreamOptions, "backend" | "ffmpegInputArgs"> & { locale?: SupportedLocale } = {}): BackendProbe {
+    return pickStreamBackend(
+      {
+        preference: options.backend ?? "auto",
+        platform: process.platform,
+        nativeBinariesAvailable: existsSync(binary("bot-stream")) && existsSync(binary("bot-capture")),
+        ffmpegPath: findFfmpeg(),
+      },
+      options.locale,
+    )
   }
 
   private ensure(): ChildProcessWithoutNullStreams {

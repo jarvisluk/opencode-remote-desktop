@@ -7,7 +7,12 @@ import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
+import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
 import { T, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+
+const DEFAULT_T = createGuiTranslator("en")
+
+type ErrorState = { key?: GuiMessageKey; detail?: string } | null
 
 interface LiveFrameState {
   jpegBase64: string
@@ -48,24 +53,26 @@ const KEY_NAMES: Record<string, string> = {
 export function LiveScreenView(props: {
   session: any
   ui: Ui
+  t?: GuiTranslate
   reason?: string
   takeoverReason?: () => string
   onResolveTakeover?: () => void
   onRetryStream?: () => void
 }): JSX.Element {
   const ui = props.ui
+  const t = props.t ?? DEFAULT_T
   const curSession = () => (typeof props.session === "function" ? props.session() : props.session)
   const [frame, setFrame] = createSignal<LiveFrameState | null>(null)
   const [streaming, setStreaming] = createSignal(true)
   // Measured frames per second; screenshot polling runs as fast as each round trip allows.
   const [fps, setFps] = createSignal(0)
   const [rtt, setRtt] = createSignal(0)
-  const [error, setError] = createSignal("")
+  const [error, setError] = createSignal<ErrorState>(null)
   const [selectedWindowId, setSelectedWindowId] = createSignal("")
   const [windows, setWindows] = createSignal<WindowItem[]>([])
   const [typing, setTyping] = createSignal(false)
   const [typeText, setTypeText] = createSignal("")
-  const [takeoverReason, setTakeoverReason] = createSignal("")
+  const [takeover, setTakeover] = createSignal<{ active: boolean; reason: string }>({ active: false, reason: "" })
   const [showLink, setShowLink] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
 
@@ -96,7 +103,7 @@ export function LiveScreenView(props: {
   const fetchNextFrame = async () => {
     if (isRequestInProgress || !streaming()) return
     const rpc = getClientRpc()
-    if (!rpc) return setError("服务器已断开")
+    if (!rpc) return setError({ key: "jpeg.serverDisconnected" })
     isRequestInProgress = true
     const startTime = Date.now()
     try {
@@ -107,33 +114,38 @@ export function LiveScreenView(props: {
         lastFrameAt = now
         setFrame(res as LiveFrameState)
         setRtt(now - startTime)
-        setError("")
+        setError(null)
       }
     } catch (err: any) {
-      setError(err?.message || "截图失败")
+      setError(err?.message ? { detail: err.message } : { key: "jpeg.captureFailed" })
     } finally {
       isRequestInProgress = false
     }
   }
 
-  const activeTakeoverReason = () => (props.takeoverReason ? props.takeoverReason() : takeoverReason())
+  const activeTakeoverReason = () =>
+    props.takeoverReason
+      ? props.takeoverReason()
+      : takeover().active
+        ? takeover().reason || t("takeover.defaultReason")
+        : ""
 
   const checkTakeovers = async () => {
     try {
       const s = curSession()
       const list = await getClientRpc()?.listTakeovers({})
       const mine = list?.items.find((i: any) => !s?.id || i.sessionID === s.id)
-      setTakeoverReason(mine ? mine.reason || "需要手动操作" : "")
+      setTakeover(mine ? { active: true, reason: mine.reason || "" } : { active: false, reason: "" })
     } catch {}
   }
 
   const resumeAI = async () => {
     try {
       await getClientRpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
-      setTakeoverReason("")
+      setTakeover({ active: false, reason: "" })
       props.onResolveTakeover?.()
     } catch (e: any) {
-      setError(`恢复失败：${e?.message}`)
+      setError({ key: "jpeg.resumeFailed", detail: e?.message ?? String(e) })
     }
   }
 
@@ -156,7 +168,7 @@ export function LiveScreenView(props: {
       await rpc.sendInput({ ...input, app: selectedWin?.appName || undefined })
       setTimeout(fetchNextFrame, 150)
     } catch (e: any) {
-      setError(`输入失败：${e?.message}`)
+      setError({ key: "jpeg.inputFailed", detail: e?.message ?? String(e) })
     }
   }
 
@@ -256,11 +268,23 @@ export function LiveScreenView(props: {
 
   const server = () => curSession()?.server
   const fill = windowFill(() => rootRef)
+  const errorText = () => {
+    const err = error()
+    if (!err) return ""
+    return err.key ? t(err.key, { error: err.detail ?? "" }) : err.detail ?? ""
+  }
   const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
-  const summary = () => error() ? `截图 · ${error()}` : !frame() ? "截图连接中" : !streaming() ? "截图 · 已暂停" : `截图 · ${fps()} fps · ${rtt()} ms`
+  const summary = () =>
+    errorText()
+      ? t("jpeg.summaryError", { error: errorText() })
+      : !frame()
+        ? t("jpeg.summaryConnecting")
+        : !streaming()
+          ? t("jpeg.summaryPaused")
+          : t("jpeg.summaryLive", { fps: fps(), rtt: rtt() })
 
   const windowOptions = () => [
-    { value: "", label: "整个屏幕" },
+    { value: "", label: t("jpeg.entireScreen") },
     ...windows().map((w) => ({ value: w.id, label: `${w.appName}: ${w.title.slice(0, 24)}` })),
   ]
 
@@ -289,29 +313,42 @@ export function LiveScreenView(props: {
         })
       : h(ui.Loader, {})),
     statusCard({
+      title: () => t("status.detailsTitle"),
       tone,
       summary,
       open: showLink,
       toggle: () => setShowLink(!showLink()),
       body: () => details([
-        { title: "通道", rows: [
-          { label: "服务器", value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
-          { label: "信令", value: () => `${channelOf(server())} · ${server()?.connected ? "已连接" : "断开"}${server()?.compatible === false ? " · 版本不兼容" : ""}` },
+        { title: () => t("status.group.channel"), rows: [
+          { label: () => t("status.row.server"), value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
+          {
+            label: () => t("status.row.signaling"),
+            value: () =>
+              `${channelOf(server(), t)} · ${server()?.connected ? t("status.connected") : t("status.disconnected")}${
+                server()?.compatible === false ? t("status.incompatible") : ""
+              }`,
+          },
         ] },
-        { title: "画面", rows: [
-          { label: "模式", value: () => `截图轮询 · ${fps()} fps` },
-          { label: "原因", value: () => props.reason ? `WebRTC 不可用：${props.reason}` : "—" },
-          { label: "往返", value: () => `${rtt()} ms` },
-          { label: "分辨率", value: () => frame() ? `${frame()!.imageWidth}×${frame()!.imageHeight}` : "—" },
+        { title: () => t("status.group.video"), rows: [
+          { label: () => t("status.row.mode"), value: () => t("jpeg.modeValue", { fps: fps() }) },
+          {
+            label: () => t("status.row.reason"),
+            value: () => (props.reason ? t("jpeg.webrtcUnavailableReason", { reason: props.reason }) : "—"),
+          },
+          { label: () => t("status.row.rtt"), value: () => `${rtt()} ms` },
+          { label: () => t("status.row.resolution"), value: () => (frame() ? `${frame()!.imageWidth}×${frame()!.imageHeight}` : "—") },
         ] },
-        { title: "输入", rows: [{ label: "键鼠", value: () => "agent-desktop 逐条注入" }] },
+        { title: () => t("status.group.input"), rows: [{ label: () => t("status.row.pointerKeyboard"), value: () => t("jpeg.inputValue") }] },
       ]),
     }),
-    () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI()) : null,
+    () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
+      text: () => t("takeover.cardPrefix", { reason: activeTakeoverReason() }),
+      resume: () => t("takeover.cardResume"),
+    }) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
-        label: "输入文字",
-        placeholder: "输入文字后回车，发往当前焦点窗口",
+        label: (() => t("jpeg.textLabel")) as any,
+        placeholder: (() => t("jpeg.textPlaceholder")) as any,
         value: typeText,
         onInput: (value: string) => setTypeText(value),
         onSubmit: (value: string) => submitText(value),
@@ -319,17 +356,17 @@ export function LiveScreenView(props: {
       })) : null,
       h("div", { style: { display: "flex", "align-items": "center", gap: T.sp(0.5) } }, [
         h(ui.Select, {
-          label: "画面范围",
+          label: (() => t("jpeg.screenScope")) as any,
           options: windowOptions,
           value: selectedWindowId,
           onChange: (value: string) => void handleWindowSelect(value),
           placement: "top-end",
         }),
-        iconButton(ui, { icon: "monitor", label: "重新连接 WebRTC", onClick: (_e) => props.onRetryStream?.() }),
-        iconButton(ui, { icon: "outline-rotate-clockwise", label: "刷新窗口列表", onClick: (_e) => void refreshWindows() }),
-        iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
-        iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
-        iconButton(ui, { icon: "expand", label: "铺满窗口（⌃⌘F 全屏）", onClick: (_e) => fill.toggle(), pressed: fill.on }),
+        iconButton(ui, { icon: "monitor", label: () => t("jpeg.btn.retryWebrtc"), onClick: (_e) => props.onRetryStream?.() }),
+        iconButton(ui, { icon: "outline-rotate-clockwise", label: () => t("jpeg.btn.refreshWindows"), onClick: (_e) => void refreshWindows() }),
+        iconButton(ui, { icon: "outline-eye", label: () => t("jpeg.btn.toggleStream"), onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
+        iconButton(ui, { icon: "keyboard", label: () => t("jpeg.btn.toggleType"), onClick: (_e) => setTyping(!typing()), pressed: typing }),
+        iconButton(ui, { icon: "expand", label: () => t("webrtc.btn.fullscreen"), onClick: (_e) => fill.toggle(), pressed: fill.on }),
       ]),
     ]),
   ])
@@ -338,6 +375,7 @@ export function LiveScreenView(props: {
 }
 
 export default Plugin.define({
+  i18n: guiCatalog,
   setup(ctx) {
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
@@ -362,10 +400,10 @@ export default Plugin.define({
 
     const setTakeoverEntry = (server: ServerRef, item: { id: string; sessionID: string; reason: string }, notifyUser: boolean) => {
       const key = makeSessionKey(server.id, item.sessionID)
-      const reason = item.reason || "需要手动操作"
+      const rawReason = item.reason || ""
       setTakeoversBySession((prev) => {
-        if (prev[key]?.id === item.id && prev[key]?.reason === reason) return prev
-        return { ...prev, [key]: { id: item.id, reason } }
+        if (prev[key]?.id === item.id && prev[key]?.reason === rawReason) return prev
+        return { ...prev, [key]: { id: item.id, reason: rawReason } }
       })
 
       const targetSession = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === item.sessionID)
@@ -376,11 +414,13 @@ export default Plugin.define({
 
       if (!notifyUser) return
 
+      const displayReason = rawReason || ctx.t("takeover.defaultReason")
+
       void ctx.attention
         .notify({
           id: item.id,
-          title: "等待人工接管",
-          message: reason,
+          title: ctx.t("takeover.waitingTitle"),
+          message: displayReason,
           variant: "default",
           session: { server: server.id, id: item.sessionID },
         })
@@ -388,13 +428,13 @@ export default Plugin.define({
 
       dismissToast(key)
       const toast = ctx.toast.show({
-        title: "等待人工接管",
-        description: reason,
+        title: ctx.t("takeover.waitingTitle"),
+        description: displayReason,
         variant: "default",
         persistent: true,
         actions: [
           {
-            label: "已完成，恢复 AI",
+            label: ctx.t("takeover.toastResume"),
             run() {
               void server.client
                 .rpc(BotRpc)
@@ -518,7 +558,9 @@ export default Plugin.define({
       wide: true,
       width: 580,
       mobile: {
-        title: "Live Screen",
+        get title() {
+          return ctx.t("panel.title")
+        },
         kind: "tab",
         icon: "monitor",
         order: 10,
@@ -531,7 +573,9 @@ export default Plugin.define({
         return [
           {
             id: PANEL_ID,
-            title: "Live Screen",
+            get title() {
+              return ctx.t("panel.title")
+            },
             closable: "hover",
             tabbable: true,
           },
@@ -544,7 +588,8 @@ export default Plugin.define({
         const sessionGetter = () => props.session
         const takeoverReason = () => {
           const s = props.session
-          return s ? takeoversBySession()[s.key]?.reason ?? "" : ""
+          const entry = s ? takeoversBySession()[s.key] : undefined
+          return entry ? entry.reason || ctx.t("takeover.defaultReason") : ""
         }
         const onResolveTakeover = () => {
           const s = props.session
@@ -557,6 +602,7 @@ export default Plugin.define({
             ? LiveScreenView({
                 session: sessionGetter,
                 ui: ctx.ui,
+                t: ctx.t,
                 reason: fallback(),
                 takeoverReason,
                 onResolveTakeover,
@@ -565,6 +611,7 @@ export default Plugin.define({
             : LiveStreamView({
                 session: sessionGetter,
                 ui: ctx.ui,
+                t: ctx.t,
                 takeoverReason,
                 onResolveTakeover,
                 onUnavailable: (reason) => {
@@ -580,10 +627,10 @@ export default Plugin.define({
     ctx.add(MenuItem, () => remote(ctx.sessions.current()) ? {
       menu: "session.panel" as const,
       id: "screen",
-      title: "Live Screen",
+      title: ctx.t("panel.title"),
       icon: "monitor" as const,
       keybind: `${ctx.id}.toggle`,
-      description: "Remote Desktop",
+      description: ctx.t("menu.description"),
       run() {
         const curSession = ctx.sessions.current()
         if (curSession) {
@@ -595,7 +642,7 @@ export default Plugin.define({
     // 3. Add Command for Palette, Keybind & Slash Command
     ctx.add(Command, () => remote(ctx.sessions.current()) ? {
       id: "toggle",
-      title: "Live Screen: Toggle Remote Desktop Tab",
+      title: ctx.t("command.toggle.title"),
       section: "session" as const,
       bind: "mod+shift+s",
       slash: {

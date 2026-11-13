@@ -3,22 +3,25 @@ import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
+import { createGuiTranslator, type GuiMessageKey, type GuiTranslate } from "../i18n/gui.ts"
 import { T, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
 
+const DEFAULT_T = createGuiTranslator("en")
+
 /** Which network path the OpenCode server connection uses, judged from its URL. */
-export function channelOf(server: { url?: string; local?: boolean } | undefined): string {
-  if (!server) return "未连接"
-  if (server.local) return "本机"
+export function channelOf(server: { url?: string; local?: boolean } | undefined, t: GuiTranslate = DEFAULT_T): string {
+  if (!server) return t("channel.disconnected")
+  if (server.local) return t("channel.local")
   let host = ""
   try {
     host = new URL(server.url ?? "").hostname
   } catch {
-    return "未知"
+    return t("channel.unknown")
   }
   if (host.endsWith(".opentunnel.xyz")) return "OpenTunnel"
   if (host.endsWith(".ts.net") || isTailscaleIp(host)) return "Tailscale"
-  if (isPrivateIp(host) || host.endsWith(".local")) return "局域网"
-  return "公网"
+  if (isPrivateIp(host) || host.endsWith(".local")) return t("channel.lan")
+  return t("channel.public")
 }
 
 function octets(host: string): number[] | null {
@@ -36,10 +39,21 @@ function isPrivateIp(host: string): boolean {
   return !!o && (o[0] === 10 || (o[0] === 192 && o[1] === 168) || (o[0] === 172 && o[1] >= 16 && o[1] <= 31))
 }
 
-const ROUTE: Record<string, string> = { host: "直连", srflx: "NAT 穿透", prflx: "NAT 穿透", relay: "TURN 中继" }
+const ROUTE_KEYS: Record<string, GuiMessageKey> = {
+  host: "route.host",
+  srflx: "route.srflx",
+  prflx: "route.prflx",
+  relay: "route.relay",
+}
+
+function routeLabel(routeType: string | undefined, t: GuiTranslate): string {
+  if (!routeType) return "—"
+  const key = ROUTE_KEYS[routeType]
+  return key ? t(key) : "—"
+}
 
 interface LinkStats {
-  route: string
+  routeType: string
   local: string
   remote: string
   rtt: number
@@ -62,10 +76,12 @@ const ZOOM_MAX = 4
 export function LiveStreamView(props: {
   session: any
   ui: Ui
+  t?: GuiTranslate
   takeoverReason?: () => string
   onResolveTakeover?: () => void
   onUnavailable: (reason: string) => void
 }): JSX.Element {
+  const t = props.t ?? DEFAULT_T
   const curSession = () => (typeof props.session === "function" ? props.session() : props.session)
   const [status, setStatus] = createSignal("connecting")
   const [connected, setConnected] = createSignal(false)
@@ -248,7 +264,7 @@ export function LiveStreamView(props: {
       const recv = inbound?.packetsReceived ?? 0
       const addr = (c: any) => c ? `${c.address ?? c.ip ?? "?"}:${c.port} ${c.protocol ?? ""} (${c.candidateType})` : "—"
       const s: LinkStats = {
-        route: ROUTE[rc?.candidateType] ?? ROUTE[lc?.candidateType] ?? "—",
+        routeType: rc?.candidateType ?? lc?.candidateType ?? "",
         local: addr(lc),
         remote: addr(rc),
         rtt: Math.round((pair?.currentRoundTripTime ?? 0) * 1000),
@@ -426,12 +442,18 @@ export function LiveStreamView(props: {
   const ui = props.ui
   const fill = windowFill(() => root)
 
-  const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.route === "TURN 中继" ? "warning" : "success")
+  const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.routeType === "relay" ? "warning" : "success")
   const summary = () => {
-    if (status() === "reconnecting") return "WebRTC 重连中"
-    if (!connected()) return "WebRTC 连接中"
+    if (status() === "reconnecting") return t("webrtc.reconnecting")
+    if (!connected()) return t("webrtc.connecting")
     const s = link()
-    return s ? `WebRTC · ${s.route} · ${s.fps ? `${s.fps} fps` : "画面静止"} · ${s.rtt} ms` : "WebRTC"
+    return s
+      ? t("webrtc.summaryConnected", {
+          route: routeLabel(s.routeType, t),
+          fpsOrStatic: s.fps ? `${s.fps} fps` : t("webrtc.staticFrame"),
+          rtt: s.rtt,
+        })
+      : "WebRTC"
   }
 
   const videoStyle = () => {
@@ -493,26 +515,48 @@ export function LiveStreamView(props: {
       style: { position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center", "pointer-events": "none" },
     }, h(ui.Loader, {})),
     statusCard({
+      title: () => t("status.detailsTitle"),
       tone,
       summary,
       open: showLink,
       toggle: () => setShowLink(!showLink()),
       body: () => details([
-        { title: "通道", rows: [
-          { label: "服务器", value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
-          { label: "信令", value: () => `${channelOf(server())} · ${server()?.connected ? "已连接" : "断开"}${server()?.compatible === false ? " · 版本不兼容" : ""}` },
+        { title: () => t("status.group.channel"), rows: [
+          { label: () => t("status.row.server"), value: () => `${server()?.name ?? "—"} · ${server()?.url ?? ""}` },
+          {
+            label: () => t("status.row.signaling"),
+            value: () =>
+              `${channelOf(server(), t)} · ${server()?.connected ? t("status.connected") : t("status.disconnected")}${
+                server()?.compatible === false ? t("status.incompatible") : ""
+              }`,
+          },
         ] },
-        { title: "画面", rows: [
-          { label: "模式", value: () => connected() ? `WebRTC H.264 · 建连 ${connectMs()} ms` : "WebRTC 协商中" },
-          { label: "路径", value: () => link()?.route ?? "—" },
-          { label: "本端", value: () => link()?.local ?? "—" },
-          { label: "远端", value: () => link()?.remote ?? "—" },
-          { label: "延迟", value: () => link() ? `${link()!.rtt} ms · 抖动 ${link()!.jitterMs} ms` : "—" },
-          { label: "流量", value: () => link() ? `${link()!.fps} fps · ${link()!.kbps} kbps · 丢包 ${link()!.lossPct}%` : "—" },
-          { label: "分辨率", value: () => link() ? `${link()!.size} · ${link()!.decoder}` : "—" },
+        { title: () => t("status.group.video"), rows: [
+          {
+            label: () => t("status.row.mode"),
+            value: () => (connected() ? t("webrtc.modeConnected", { ms: connectMs() }) : t("webrtc.modeNegotiating")),
+          },
+          { label: () => t("status.row.route"), value: () => routeLabel(link()?.routeType, t) },
+          { label: () => t("status.row.local"), value: () => link()?.local ?? "—" },
+          { label: () => t("status.row.remote"), value: () => link()?.remote ?? "—" },
+          {
+            label: () => t("status.row.latency"),
+            value: () => (link() ? t("webrtc.latencyValue", { rtt: link()!.rtt, jitter: link()!.jitterMs }) : "—"),
+          },
+          {
+            label: () => t("status.row.traffic"),
+            value: () =>
+              link()
+                ? t("webrtc.trafficValue", { fps: link()!.fps, kbps: link()!.kbps, loss: link()!.lossPct })
+                : "—",
+          },
+          { label: () => t("status.row.resolution"), value: () => (link() ? `${link()!.size} · ${link()!.decoder}` : "—") },
         ] },
-        { title: "输入", rows: [
-          { label: "键鼠", value: () => (link() && dc?.readyState === "open" ? "DataChannel 原生事件" : "未就绪") },
+        { title: () => t("status.group.input"), rows: [
+          {
+            label: () => t("status.row.pointerKeyboard"),
+            value: () => (link() && dc?.readyState === "open" ? t("webrtc.inputReady") : t("webrtc.inputNotReady")),
+          },
         ] },
       ]),
     }),
@@ -520,17 +564,20 @@ export function LiveStreamView(props: {
       await rpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
       setTakeover("")
       props.onResolveTakeover?.()
+    }, {
+      text: () => t("takeover.cardPrefix", { reason: activeTakeover() }),
+      resume: () => t("takeover.cardResume"),
     }) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
-      iconButton(ui, { icon: "collapse", label: "适应面板", onClick: (_e) => { setZoom(null); invalidateRect() } }),
-      iconButton(ui, { icon: "outline-magnifier-minus", label: "缩小（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),
+      iconButton(ui, { icon: "collapse", label: () => t("webrtc.btn.fit"), onClick: (_e) => { setZoom(null); invalidateRect() } }),
+      iconButton(ui, { icon: "outline-magnifier-minus", label: () => t("webrtc.btn.zoomOut"), onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),
       h("span", {
-        title: "原始像素 1:1",
+        title: () => t("webrtc.btn.zoomReset"),
         onClick: () => zoomTo(1),
         style: { "min-width": "40px", "text-align": "center", color: T.muted, "font-variant-numeric": "tabular-nums", cursor: "pointer" },
       }, zoomLabel),
-      iconButton(ui, { icon: "outline-magnifier-plus", label: "放大（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) * 1.25) }),
-      iconButton(ui, { icon: "expand", label: "铺满窗口（⌃⌘F 全屏）", onClick: (_e) => fill.toggle(), pressed: fill.on }),
+      iconButton(ui, { icon: "outline-magnifier-plus", label: () => t("webrtc.btn.zoomIn"), onClick: (_e) => zoomTo((zoom() ?? fitScale()) * 1.25) }),
+      iconButton(ui, { icon: "expand", label: () => t("webrtc.btn.fullscreen"), onClick: (_e) => fill.toggle(), pressed: fill.on }),
     ]),
   ]) as unknown as JSX.Element
 }

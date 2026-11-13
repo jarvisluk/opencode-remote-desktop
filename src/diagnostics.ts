@@ -1,6 +1,8 @@
 import { resolveBinary, runCommand } from "./macos/exec.ts"
 import { getMacDesktopStatus } from "./macos/desktop.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
+import { resolveLocale, type SupportedLocale } from "./i18n/locale.ts"
+import { tServer } from "./i18n/server.ts"
 
 /**
  * Minimum CLI versions verified against this plugin's command usage.
@@ -12,14 +14,13 @@ export const MIN_AGENT_BROWSER_VERSION = "0.41.1"
 
 /** Official install commands (verified against vercel-labs READMEs, 2026-11). */
 export const AGENT_DESKTOP_INSTALL_HINT =
-  "npm install -g agent-desktop (or: brew install agent-desktop), then `agent-desktop permissions --guide` 授予辅助功能与录屏权限"
+  "npm install -g agent-desktop (or: brew install agent-desktop), then run `agent-desktop permissions --guide`"
 export const AGENT_BROWSER_INSTALL_HINT =
   "npm install -g agent-browser && agent-browser install (or: brew install agent-browser)"
 
-const ACCESSIBILITY_HINT =
-  "系统设置 → 隐私与安全性 → 辅助功能，为宿主终端/OpenCode 进程勾选；或运行 `agent-desktop permissions --guide`。"
-const SCREEN_RECORDING_HINT = "系统设置 → 隐私与安全性 → 屏幕录制，为宿主终端/OpenCode 进程勾选后重启会话。"
-const SIDECAR_HINT = "在插件目录运行 `npm run build:native`（需要 Go，macOS 另需 swiftc）。"
+export function getAgentDesktopInstallHint(locale: SupportedLocale = resolveLocale()): string {
+  return tServer(locale, "diag.agentDesktopInstallHint")
+}
 
 export interface DependencyCheck {
   readonly name: string
@@ -100,12 +101,13 @@ async function checkCli(
  */
 export async function collectDiagnostics(
   signal?: AbortSignal,
-  stream?: { backend?: "auto" | "native" | "ffmpeg" },
+  stream?: { backend?: "auto" | "native" | "ffmpeg"; locale?: SupportedLocale },
 ): Promise<DiagnosticsReport> {
+  const locale = stream?.locale ?? resolveLocale()
   const isMac = process.platform === "darwin"
   const dependencies = isMac
     ? await Promise.all([
-        checkCli("agent-desktop", MIN_AGENT_DESKTOP_VERSION, AGENT_DESKTOP_INSTALL_HINT, signal),
+        checkCli("agent-desktop", MIN_AGENT_DESKTOP_VERSION, getAgentDesktopInstallHint(locale), signal),
         checkCli("agent-browser", MIN_AGENT_BROWSER_VERSION, AGENT_BROWSER_INSTALL_HINT, signal),
       ])
     : []
@@ -125,98 +127,132 @@ export async function collectDiagnostics(
     isMac,
     dependencies,
     permissions,
-    stream: StreamSidecar.probe(stream),
+    stream: StreamSidecar.probe({ backend: stream?.backend, locale }),
   }
 }
 
 /** Derives actionable issues from a report (no extra probing). */
-export function collectHealthIssues(report: DiagnosticsReport): HealthIssue[] {
+export function collectHealthIssues(
+  report: DiagnosticsReport,
+  locale: SupportedLocale = resolveLocale(),
+): HealthIssue[] {
   const issues: HealthIssue[] = []
   for (const dep of report.dependencies) {
     if (!dep.installed) {
-      issues.push({ component: dep.name, problem: "CLI 未安装（PATH 未找到）", hint: `运行 \`${dep.installHint}\`。` })
+      issues.push({
+        component: dep.name,
+        problem: tServer(locale, "diag.depNotInstalledProblem"),
+        hint: tServer(locale, "diag.depNotInstalledHint", { installHint: dep.installHint ?? "" }),
+      })
     } else if (dep.versionOk === false) {
       issues.push({
         component: dep.name,
-        problem: `已安装 ${dep.version}，低于已验证版本 ${dep.minimumVersion}，CLI 契约可能不兼容`,
-        hint: `升级：\`${dep.installHint}\`。`,
+        problem: tServer(locale, "diag.depOutdatedProblem", {
+          version: dep.version ?? "",
+          minimumVersion: dep.minimumVersion ?? "",
+        }),
+        hint: tServer(locale, "diag.depOutdatedHint", { installHint: dep.installHint ?? "" }),
       })
     }
   }
   if (report.permissions) {
     if (report.permissions.accessibility !== "granted") {
       issues.push({
-        component: "辅助功能权限 (Accessibility)",
-        problem: `当前状态 \`${report.permissions.accessibility}\`，桌面语义操作将失败`,
-        hint: ACCESSIBILITY_HINT,
+        component: tServer(locale, "diag.accessibilityComponent"),
+        problem: tServer(locale, "diag.accessibilityProblem", { state: report.permissions.accessibility }),
+        hint: tServer(locale, "diag.accessibilityHint"),
       })
     }
     if (report.permissions.screenRecording !== "granted") {
       issues.push({
-        component: "屏幕录制权限 (Screen Recording)",
-        problem: `当前状态 \`${report.permissions.screenRecording}\`，截屏/直播将失败`,
-        hint: SCREEN_RECORDING_HINT,
+        component: tServer(locale, "diag.screenRecordingComponent"),
+        problem: tServer(locale, "diag.screenRecordingProblem", { state: report.permissions.screenRecording }),
+        hint: tServer(locale, "diag.screenRecordingHint"),
       })
     }
   }
   if (!report.stream.backend) {
     issues.push({
-      component: "实时画面后端",
-      problem: `无可用采集后端（${report.stream.reason ?? "未知原因"}），直播将降级为低帧率 JPEG 轮询`,
-      hint: SIDECAR_HINT,
+      component: tServer(locale, "diag.streamComponent"),
+      problem: tServer(locale, "diag.streamUnavailableProblem", {
+        reason: report.stream.reason ?? tServer(locale, "diag.unknownReason"),
+      }),
+      hint: tServer(locale, "diag.sidecarHint"),
     })
   } else if (report.stream.backend === "ffmpeg") {
     issues.push({
-      component: "实时画面后端",
-      problem: "使用 FFmpeg 直播：观看可用，但接管期间无键鼠注入（输入将走 agent-desktop RPC 降级路径，延迟较高）",
-      hint: "macOS 上可构建原生后端获得完整能力：`npm run build:native`。",
+      component: tServer(locale, "diag.streamComponent"),
+      problem: tServer(locale, "diag.streamFfmpegProblem"),
+      hint: tServer(locale, "diag.streamFfmpegHint"),
     })
   }
   return issues
 }
 
 /** Startup warnings for missing/mismatched pieces; empty array = all healthy. */
-export function startupWarnings(report: DiagnosticsReport): string[] {
-  return collectHealthIssues(report).map((issue) => `[bot] ${issue.component}: ${issue.problem} Fix: ${issue.hint}`)
+export function startupWarnings(
+  report: DiagnosticsReport,
+  locale: SupportedLocale = resolveLocale(),
+): string[] {
+  return collectHealthIssues(report, locale).map((issue) =>
+    tServer(locale, "diag.startupWarning", {
+      component: issue.component,
+      problem: issue.problem,
+      hint: issue.hint,
+    }),
+  )
 }
 
 /** Human-readable `/doctor` output. */
-export function formatDoctorReport(report: DiagnosticsReport): string {
-  const lines = [`### Bot Doctor — 依赖体检`]
+export function formatDoctorReport(
+  report: DiagnosticsReport,
+  locale: SupportedLocale = resolveLocale(),
+): string {
+  const lines = [tServer(locale, "doctor.title")]
   if (!report.isMac) {
-    lines.push(
-      `- **平台**: \`${report.platform}\` — 桌面控制当前仅支持 macOS（已降级关闭）。`,
-    )
-    lines.push(streamLine(report))
+    lines.push(tServer(locale, "doctor.nonMacPlatform", { platform: report.platform }))
+    lines.push(streamLine(report, locale))
     return lines.join("\n")
   }
   for (const dep of report.dependencies) {
     const state = !dep.installed
-      ? "✖ 未安装"
+      ? tServer(locale, "doctor.depNotInstalled")
       : dep.versionOk === false
-        ? `⚠ 已安装 ${dep.version}（低于已验证版本 ${dep.minimumVersion}）`
-        : `✔ ${dep.version ?? "已安装"}`
+        ? tServer(locale, "doctor.depOutdated", {
+            version: dep.version ?? "",
+            minimumVersion: dep.minimumVersion ?? "",
+          })
+        : tServer(locale, "doctor.depInstalled", {
+            version: dep.version ?? tServer(locale, "doctor.installedFallback"),
+          })
     lines.push(`- **${dep.name}**: ${state}`)
     if (!dep.installed || dep.versionOk === false) {
-      lines.push(`  - 修复: \`${dep.installHint}\``)
+      lines.push(tServer(locale, "doctor.fixCode", { hint: dep.installHint ?? "" }))
     }
   }
   if (report.permissions) {
-    lines.push(`- **辅助功能权限 (Accessibility)**: \`${report.permissions.accessibility}\``)
-    lines.push(`- **屏幕录制权限 (Screen Recording)**: \`${report.permissions.screenRecording}\``)
-    if (report.permissions.accessibility !== "granted") lines.push(`  - 修复: ${ACCESSIBILITY_HINT}`)
-    if (report.permissions.screenRecording !== "granted") lines.push(`  - 修复: ${SCREEN_RECORDING_HINT}`)
+    lines.push(tServer(locale, "doctor.accessibilityLine", { state: report.permissions.accessibility }))
+    lines.push(tServer(locale, "doctor.screenRecordingLine", { state: report.permissions.screenRecording }))
+    if (report.permissions.accessibility !== "granted") {
+      lines.push(tServer(locale, "doctor.fix", { hint: tServer(locale, "diag.accessibilityHint") }))
+    }
+    if (report.permissions.screenRecording !== "granted") {
+      lines.push(tServer(locale, "doctor.fix", { hint: tServer(locale, "diag.screenRecordingHint") }))
+    }
   }
-  lines.push(streamLine(report))
+  lines.push(streamLine(report, locale))
   return lines.join("\n")
 }
 
-function streamLine(report: DiagnosticsReport): string {
+function streamLine(report: DiagnosticsReport, locale: SupportedLocale): string {
   if (report.stream.backend === "native") {
-    return "- **直播后端**: ✔ 原生 bot-capture（WebRTC 低延迟 + 键鼠注入）"
+    return tServer(locale, "doctor.streamNative")
   }
   if (report.stream.backend === "ffmpeg") {
-    return "- **直播后端**: ⚠ FFmpeg（观看可用，接管键鼠注入走降级路径）。macOS 完整能力：`npm run build:native`"
+    return tServer(locale, "doctor.streamFfmpeg")
   }
-  return `- **直播后端**: ✖ 不可用（${report.stream.reason ?? "未知原因"}），实时画面降级为 JPEG 轮询。${SIDECAR_HINT}`
+  return tServer(locale, "doctor.streamUnavailable", {
+    reason: report.stream.reason ?? tServer(locale, "diag.unknownReason"),
+    hint: tServer(locale, "diag.sidecarHint"),
+  })
 }

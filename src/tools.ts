@@ -282,7 +282,7 @@ export function registerBotTools(
       properties: {
         reason: {
           type: "string",
-          description: "Clear explanation shown to the user (e.g. '请在右侧画面中切换或登录指定账号')",
+          description: "Clear explanation shown to the user (e.g. 'Please sign in or switch accounts in Live Screen')",
         },
         app: {
           type: "string",
@@ -312,7 +312,7 @@ export function registerBotTools(
         content: [
           `Human takeover requested (${item.id}): "${input.reason}".`,
           `- Built-in Live Screen panel and takeover banner have been triggered automatically for this session.`,
-          `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click「完成并恢复 AI」(or reply in chat) when done.`,
+          `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click the resume button (or reply in chat) when done.`,
           `- Do NOT paste standalone Web Console URLs unless the user is on mobile/external browser without Live Screen or asks for a link (they can run /bot anytime).`,
         ].join("\n"),
       }

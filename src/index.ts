@@ -20,6 +20,8 @@ import { collectBotStatus } from "./status.ts"
 import { collectDiagnostics, startupWarnings } from "./diagnostics.ts"
 import { registerBotTools } from "./tools.ts"
 import { registerBotCommands } from "./commands.ts"
+import { resolveLocale } from "./i18n/locale.ts"
+import { tServer } from "./i18n/server.ts"
 
 // Match keywords on word boundaries for Latin words, or literal substring for Chinese characters
 const HIGH_RISK_KEYWORDS = [
@@ -81,6 +83,7 @@ export default Plugin.define({
     // plugin too; with host: false it serves the sidebar without exposing this machine.
     if (!options.host) return async () => {}
     const isMac = process.platform === "darwin"
+    const locale = resolveLocale(options.locale)
 
     const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
     const takeovers = new TakeoverManager(() => awake.acquire())
@@ -94,19 +97,28 @@ export default Plugin.define({
       backend: options.streamBackend,
       ffmpegInputArgs: options.ffmpegInputArgs,
     }
-    const streamProbe = StreamSidecar.probe(streamOptions)
+    const streamProbe = StreamSidecar.probe({ ...streamOptions, locale })
     const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
     const webConsole = new WebTakeoverConsole(options, takeovers, stream)
     if (!stream) {
-      console.warn(`[bot] 实时直播不可用：${streamProbe.reason ?? "未知原因"}；实时画面将降级为 JPEG 轮询`)
+      console.warn(
+        tServer(locale, "startup.streamUnavailable", {
+          reason: streamProbe.reason ?? tServer(locale, "diag.unknownReason"),
+        }),
+      )
     } else if (streamProbe.backend === "ffmpeg") {
-      console.warn("[bot] 直播使用 FFmpeg 后端：观看可用，接管期间键鼠注入将走 agent-desktop 降级路径")
+      console.warn(tServer(locale, "startup.streamFfmpeg"))
     }
 
     // Dependency probe: surface missing CLIs / unavailable stream backend at startup
     // instead of first tool failure. Works on every platform (no-ops are cheap).
     try {
-      for (const warning of startupWarnings(await collectDiagnostics(undefined, { backend: options.streamBackend }))) console.warn(warning)
+      for (const warning of startupWarnings(
+        await collectDiagnostics(undefined, { backend: options.streamBackend, locale }),
+        locale,
+      )) {
+        console.warn(warning)
+      }
     } catch {
       // Diagnostics must never block plugin startup.
     }
@@ -250,7 +262,7 @@ export default Plugin.define({
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
-            description: "已完成人工接管",
+            description: tServer(locale, "takeover.resumedDescription"),
             text: `Human completed takeover (${item.id}: "${item.reason}")${note ? ` — ${note}` : ""}. Take a fresh snapshot or screenshot to verify the updated UI state before continuing.`,
             delivery: "queue",
             resume: true,
@@ -270,7 +282,7 @@ export default Plugin.define({
       ])
       if (matchedKeyword && event.effect === "allow") {
         event.effect = "ask"
-        event.message = `Bot 检测到敏感操作关键词「${matchedKeyword}」，请确认是否允许在 Mac 上执行。`
+        event.message = tServer(locale, "permission.highRisk", { keyword: matchedKeyword })
       }
     })
 

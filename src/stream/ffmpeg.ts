@@ -1,4 +1,6 @@
 import { resolveBinary } from "../macos/exec.ts"
+import { resolveLocale, type SupportedLocale } from "../i18n/locale.ts"
+import { tServer } from "../i18n/server.ts"
 
 /** Which live-stream capture backend the sidecar should use. */
 export type StreamBackendPreference = "auto" | "native" | "ffmpeg"
@@ -78,16 +80,19 @@ export interface BackendProbe {
 }
 
 /** Picks the live-stream backend: native bot-capture (framed contract) or a raw ffmpeg pipe. */
-export function pickStreamBackend(input: BackendProbeInput): BackendProbe {
+export function pickStreamBackend(
+  input: BackendProbeInput,
+  locale: SupportedLocale = resolveLocale(),
+): BackendProbe {
   if (input.preference === "native") {
     return input.nativeBinariesAvailable
       ? { backend: "native" }
-      : { backend: null, reason: "原生 bot-capture 二进制未构建（npm run build:native）" }
+      : { backend: null, reason: tServer(locale, "stream.nativeMissing") }
   }
   if (input.preference === "ffmpeg") {
     return input.ffmpegPath
       ? { backend: "ffmpeg", ffmpegPath: input.ffmpegPath }
-      : { backend: null, reason: "PATH 上未找到 ffmpeg" }
+      : { backend: null, reason: tServer(locale, "stream.ffmpegMissing") }
   }
   // auto: native first on macOS (hardware encode + input injection), ffmpeg elsewhere.
   if (input.platform === "darwin" && input.nativeBinariesAvailable) return { backend: "native" }
@@ -95,7 +100,7 @@ export function pickStreamBackend(input: BackendProbeInput): BackendProbe {
   if (input.nativeBinariesAvailable) return { backend: "native" }
   return {
     backend: null,
-    reason: "无可用采集后端：未构建 bot-capture 且 PATH 上无 ffmpeg",
+    reason: tServer(locale, "stream.noneAvailable"),
   }
 }
 

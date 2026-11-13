@@ -58,14 +58,16 @@ export function dot(tone: () => Tone): JSX.Element {
   }) as unknown as JSX.Element
 }
 
+export type TextOrGetter = string | (() => string)
+
 /** Icon-only button with a tooltip. Handlers take an argument: solid-js/h turns zero-arg function props into getters. */
-export function iconButton(ui: Ui, p: { icon: IconName; label: string; onClick: (e: MouseEvent) => void; pressed?: () => boolean }): JSX.Element {
+export function iconButton(ui: Ui, p: { icon: IconName; label: TextOrGetter; onClick: (e: MouseEvent) => void; pressed?: () => boolean }): JSX.Element {
   return h(ui.Tooltip, {
-    value: p.label,
+    value: p.label as any,
     placement: "top",
     children: h(ui.IconButton, {
       icon: p.icon,
-      label: p.label,
+      label: p.label as any,
       variant: "ghost-muted",
       size: "large",
       onClick: p.onClick,
@@ -75,12 +77,12 @@ export function iconButton(ui: Ui, p: { icon: IconName; label: string; onClick: 
 }
 
 export interface Row {
-  label: string
+  label: TextOrGetter
   value: () => string
 }
 
 /** Grouped two-column details: faint group title, muted label, monospace value. */
-export function details(groups: { title: string; rows: Row[] }[]): JSX.Element {
+export function details(groups: { title: TextOrGetter; rows: Row[] }[]): JSX.Element {
   return h("div", {
     style: { display: "grid", "grid-template-columns": "auto 1fr", gap: `${T.sp(0.5)} ${T.sp(3)}`, padding: `0 ${T.sp(3)} ${T.sp(2)}`, "min-width": "260px" },
   }, groups.flatMap((g) => [
@@ -93,12 +95,12 @@ export function details(groups: { title: string; rows: Row[] }[]): JSX.Element {
 }
 
 /** Top-left connection card: status dot + summary line, expands to details on click. */
-export function statusCard(p: { tone: () => Tone; summary: () => string; open: () => boolean; toggle: () => void; body: () => JSX.Element }): JSX.Element {
+export function statusCard(p: { title?: TextOrGetter; tone: () => Tone; summary: () => string; open: () => boolean; toggle: () => void; body: () => JSX.Element }): JSX.Element {
   return h("div", { style: floating("top-left", { overflow: "hidden" }) }, [
     h("div", {
       role: "button",
       tabIndex: 0,
-      title: "连接详情",
+      title: p.title ?? "Connection details",
       onClick: () => p.toggle(),
       onKeyDown: (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && p.toggle(),
       style: { display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1.5)} ${T.sp(3)}`, cursor: "pointer", "user-select": "none" },
@@ -111,12 +113,17 @@ export function statusCard(p: { tone: () => Tone; summary: () => string; open: (
 }
 
 /** Top-right card shown while a human takeover is pending. */
-export function takeoverCard(ui: Ui, reason: () => string, resume: () => void): JSX.Element {
+export function takeoverCard(
+  ui: Ui,
+  reason: () => string,
+  resume: () => void,
+  labels?: { text?: () => string; resume?: TextOrGetter },
+): JSX.Element {
   return h("div", {
     style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
   }, [
-    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => `人工接管：${reason()}`),
-    h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: "完成并恢复 AI" }),
+    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
+    h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
   ]) as unknown as JSX.Element
 }
 

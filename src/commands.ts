@@ -7,6 +7,8 @@ import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
 import { collectDiagnostics, formatDoctorReport, startupWarnings } from "./diagnostics.ts"
+import { resolveLocale, toBcp47 } from "./i18n/locale.ts"
+import { tServer } from "./i18n/server.ts"
 
 export function registerBotCommands(
   editor: CommandEditor,
@@ -22,10 +24,11 @@ export function registerBotCommands(
   },
 ): void {
   const { options, awake, browser, webConsole, takeovers, routines, syntheticSessionMessage, promptSession } = context
+  const locale = resolveLocale(options.locale)
 
   editor.add({
     name: "bot",
-    description: "查看 Mac 宿主机状态、无障碍/录屏权限及远程实时画面控制台链接",
+    description: tServer(locale, "cmd.bot.description"),
     execute: async ({ sessionID }: CommandInvocation) => {
       const summary = await collectBotStatus({
         awake,
@@ -36,22 +39,32 @@ export function registerBotCommands(
         sessionID,
       })
       const { desktop, keepAwakeActive, browserMode, consoleUrls, routines: routineList } = summary
-      const healthWarnings = startupWarnings(await collectDiagnostics(undefined, { backend: options.streamBackend }))
+      const healthWarnings = startupWarnings(
+        await collectDiagnostics(undefined, { backend: options.streamBackend, locale }),
+        locale,
+      )
       const lines = [
-        `### Bot macOS 宿主机状态`,
-        `- **平台**: \`${desktop.platform}\` (${desktop.supported ? "已启用" : "当前仅支持 macOS"})`,
-        `- **辅助功能权限 (Accessibility)**: \`${desktop.accessibility}\``,
-        `- **屏幕录制权限 (Screen Recording)**: \`${desktop.screenRecording}\``,
-        `- **防休眠 (caffeinate)**: \`${keepAwakeActive ? "运行中" : `待命 (${options.keepAwake})`}\``,
-        `- **浏览器模式**: \`${browserMode}\``,
-        `- **挂起中的人工接管**: \`${takeovers.size}\` 个`,
-        `- **24/7 后台例程**: \`${routineList.length}\` 个`,
+        tServer(locale, "cmd.bot.title"),
+        tServer(locale, "cmd.bot.platform", {
+          platform: desktop.platform,
+          status: tServer(locale, desktop.supported ? "cmd.bot.platformEnabled" : "cmd.bot.platformMacOnly"),
+        }),
+        tServer(locale, "cmd.bot.accessibility", { state: desktop.accessibility }),
+        tServer(locale, "cmd.bot.screenRecording", { state: desktop.screenRecording }),
+        tServer(locale, "cmd.bot.keepAwake", {
+          state: keepAwakeActive
+            ? tServer(locale, "cmd.bot.keepAwakeRunning")
+            : tServer(locale, "cmd.bot.keepAwakeStandby", { mode: options.keepAwake }),
+        }),
+        tServer(locale, "cmd.bot.browserMode", { mode: browserMode }),
+        tServer(locale, "cmd.bot.pendingTakeovers", { count: takeovers.size }),
+        tServer(locale, "cmd.bot.routines", { count: routineList.length }),
         consoleUrls.length > 0
-          ? `- **Web / 手机端实时远程桌面链接**（含免密安全令牌）:\n${consoleUrls.map((u) => `  - ${u}`).join("\n")}`
-          : `- **Web 控制台**: 未启用`,
+          ? tServer(locale, "cmd.bot.consoleUrls", { urls: consoleUrls.map((u) => `  - ${u}`).join("\n") })
+          : tServer(locale, "cmd.bot.consoleDisabled"),
         healthWarnings.length > 0
-          ? `- **组件体检**: ⚠️ ${healthWarnings.length} 项待修复 — 运行 \`/doctor\` 查看详情与修复建议`
-          : `- **组件体检**: ✅ 全部依赖就绪`,
+          ? tServer(locale, "cmd.bot.healthWarn", { count: healthWarnings.length })
+          : tServer(locale, "cmd.bot.healthOk"),
       ]
       await syntheticSessionMessage(sessionID, lines.join("\n"))
     },
@@ -59,10 +72,10 @@ export function registerBotCommands(
 
   editor.add({
     name: "doctor",
-    description: "体检宿主机依赖（agent CLI 及版本、原生 sidecar、TCC 权限、浏览器模式）并给出修复建议",
+    description: tServer(locale, "cmd.doctor.description"),
     execute: async ({ sessionID }: CommandInvocation) => {
       const [report, summary] = await Promise.all([
-        collectDiagnostics(undefined, { backend: options.streamBackend }),
+        collectDiagnostics(undefined, { backend: options.streamBackend, locale }),
         collectBotStatus({
           awake,
           browser,
@@ -72,28 +85,28 @@ export function registerBotCommands(
           sessionID,
         }),
       ])
-      const lines = [formatDoctorReport(report)]
-      lines.push(`- **浏览器模式**: \`${summary.browserMode}\``)
+      const lines = [formatDoctorReport(report, locale)]
+      lines.push(tServer(locale, "doctor.browserMode", { mode: summary.browserMode }))
       await syntheticSessionMessage(sessionID, lines.join("\n"))
     },
   })
 
   editor.add({
     name: "screen",
-    description: "截取当前 Mac 屏幕并获取 Web / 手机端实时远程操控链接",
+    description: tServer(locale, "cmd.screen.description"),
     execute: async ({ sessionID, delivery }: CommandInvocation) => {
       const urls = webConsole.getUrls(sessionID)
       await promptSession({
         sessionID,
         delivery,
-        text: `请立即调用 computer_screenshot 截取当前 Mac 主屏幕，并把以下远程实时操控台链接展示给我：\n${urls.join("\n")}`,
+        text: tServer(locale, "cmd.screen.prompt", { urls: urls.join("\n") }),
       })
     },
   })
 
   editor.add({
     name: "takeover",
-    description: "查看或结束人工接管（用法: /takeover 或 /takeover done [说明]）",
+    description: tServer(locale, "cmd.takeover.description"),
     execute: async ({ sessionID, prompt }: CommandInvocation) => {
       const arg = (prompt.text ?? "").trim()
       if (!arg || arg === "list") {
@@ -101,10 +114,10 @@ export function registerBotCommands(
         const urls = webConsole.getUrls(sessionID)
         const body =
           items.length === 0
-            ? `当前没有等待中的人工接管。\n实时画面控制台：${urls.join(" | ")}`
+            ? tServer(locale, "cmd.takeover.empty", { urls: urls.join(" | ") })
             : items
-                .map((t) => `- \`${t.id}\` (会话 \`${t.sessionID}\`): ${t.reason}`)
-                .join("\n") + `\n\n操作完成后点击控制台绿色按钮，或发送 \`/takeover done\` 交还 AI。`
+                .map((t) => tServer(locale, "cmd.takeover.item", { id: t.id, sessionID: t.sessionID, reason: t.reason }))
+                .join("\n") + tServer(locale, "cmd.takeover.footer")
         await syntheticSessionMessage(sessionID, body)
         return
       }
@@ -115,7 +128,9 @@ export function registerBotCommands(
         const anyResolved = takeovers.resolveBySession(undefined, note, { source: "command" })
         await syntheticSessionMessage(
           sessionID,
-          anyResolved.length > 0 ? `已恢复 ${anyResolved.length} 个挂起的人工接管任务。` : "当前没有挂起的人工接管任务。",
+          anyResolved.length > 0
+            ? tServer(locale, "cmd.takeover.resumedCount", { count: anyResolved.length })
+            : tServer(locale, "cmd.takeover.nonePending"),
         )
       }
     },
@@ -123,7 +138,7 @@ export function registerBotCommands(
 
   editor.add({
     name: "routine",
-    description: "查看或立即触发 24/7 常驻例程（用法: /routine 或 /routine run <id>）",
+    description: tServer(locale, "cmd.routine.description"),
     execute: async ({ sessionID, prompt }: CommandInvocation) => {
       const arg = (prompt.text ?? "").trim()
       const runMatch = arg.match(/^run\s+(\S+)/i)
@@ -132,26 +147,29 @@ export function registerBotCommands(
         await syntheticSessionMessage(
           sessionID,
           out.ok
-            ? `已触发后台例程 \`${runMatch[1]}\`，运行会话：\`${out.sessionID}\``
-            : `触发失败：${out.error}`,
+            ? tServer(locale, "cmd.routine.triggered", { id: runMatch[1], sessionID: out.sessionID ?? "" })
+            : tServer(locale, "cmd.routine.triggerFailed", { error: out.error ?? "" }),
         )
         return
       }
       const list = await routines.list()
       if (list.length === 0) {
-        await syntheticSessionMessage(
-          sessionID,
-          "当前暂无 24/7 常驻例程。你可以直接用自然语言告诉我（例如：「每天早上 9 点帮我巡检微信和邮件摘要」），我会调用 `computer_routine` 创建。",
-        )
+        await syntheticSessionMessage(sessionID, tServer(locale, "cmd.routine.empty"))
         return
       }
-      const rows = list.map(
-        (r) =>
-          `- \`${r.id}\` **${r.name}** [${r.enabled ? "启用" : "暂停"}] · 周期: ${
-            r.everyMinutes ? `每 ${r.everyMinutes} 分钟` : `每日 ${r.dailyAt}`
-          } · 下次执行: ${new Date(r.nextRunAt).toLocaleString()}`,
+      const dateLocale = toBcp47(locale)
+      const rows = list.map((r) =>
+        tServer(locale, "cmd.routine.row", {
+          id: r.id,
+          name: r.name,
+          state: tServer(locale, r.enabled ? "cmd.routine.enabled" : "cmd.routine.paused"),
+          schedule: r.everyMinutes
+            ? tServer(locale, "cmd.routine.everyMinutes", { minutes: r.everyMinutes })
+            : tServer(locale, "cmd.routine.dailyAt", { time: r.dailyAt ?? "" }),
+          nextRun: new Date(r.nextRunAt).toLocaleString(dateLocale),
+        }),
       )
-      await syntheticSessionMessage(sessionID, `### 24/7 常驻例程列表\n${rows.join("\n")}`)
+      await syntheticSessionMessage(sessionID, tServer(locale, "cmd.routine.header", { rows: rows.join("\n") }))
     },
   })
 }
