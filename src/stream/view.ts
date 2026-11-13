@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
-import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, toggleFullscreen, type Tone } from "../ui.ts"
+import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
 
 /** Which network path the OpenCode server connection uses, judged from its URL. */
 export function channelOf(server: { url?: string; local?: boolean } | undefined): string {
@@ -66,7 +66,6 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
   // null = fit to panel; otherwise remote pixels per CSS pixel.
   const [zoom, setZoom] = createSignal<number | null>(null)
   const [dims, setDims] = createSignal({ w: 0, h: 0 })
-  const [fullscreen, setFullscreen] = createSignal(false)
   const [showLink, setShowLink] = createSignal(false)
   const [link, setLink] = createSignal<LinkStats | null>(null)
   const [connectMs, setConnectMs] = createSignal(0)
@@ -279,22 +278,18 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
     } catch {}
   }
 
-  const onFullscreenChange = () => setFullscreen(document.fullscreenElement === root)
-
   onMount(() => {
     void connect().catch((err) => giveUp(err?.message ?? String(err)))
     void checkTakeovers()
     takeoverTimer = setInterval(checkTakeovers, 3000)
-    document.addEventListener("fullscreenchange", onFullscreenChange)
   })
   onCleanup(() => {
-    document.removeEventListener("fullscreenchange", onFullscreenChange)
-    if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {})
     teardown()
   })
 
   const server = () => props.session?.server
   const ui = props.ui
+  const fill = windowFill(() => root)
 
   const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.route === "TURN 中继" ? "warning" : "success")
   const summary = () => {
@@ -324,6 +319,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
       muted: true,
       playsInline: true,
       tabIndex: 0,
+      "data-bot-screen": "",
       onResize: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
       onLoadedMetadata: () => video && setDims({ w: video.videoWidth, h: video.videoHeight }),
       onFocus: () => setFocused(true),
@@ -378,7 +374,7 @@ export function LiveStreamView(props: { session: any; ui: Ui; onUnavailable: (re
         style: { "min-width": "40px", "text-align": "center", color: T.muted, "font-variant-numeric": "tabular-nums", cursor: "pointer" },
       }, zoomLabel),
       iconButton(ui, { icon: "outline-magnifier-plus", label: "放大（也可双指捏合）", onClick: (_e) => zoomTo((zoom() ?? fitScale()) * 1.25) }),
-      iconButton(ui, { icon: "expand", label: "全屏（Esc 退出）", onClick: (_e) => toggleFullscreen(root), pressed: fullscreen }),
+      iconButton(ui, { icon: "expand", label: "铺满窗口", onClick: (_e) => fill.toggle(), pressed: fill.on }),
     ]),
   ]) as unknown as JSX.Element
 }

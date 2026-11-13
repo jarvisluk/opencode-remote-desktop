@@ -1,4 +1,4 @@
-import type { JSX } from "solid-js"
+import { createSignal, onCleanup, type JSX } from "solid-js"
 import h from "solid-js/h"
 import type { IconName, Ui } from "@opencode/plugin/gui"
 
@@ -120,8 +120,46 @@ export function takeoverCard(ui: Ui, reason: () => string, resume: () => void): 
   ]) as unknown as JSX.Element
 }
 
-export function toggleFullscreen(el: HTMLElement | undefined) {
-  if (!el) return
-  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
-  else void el.requestFullscreen().catch(() => {})
+/**
+ * Lets a view fill the whole OpenCode window. HTML fullscreen never completes in the Desktop shell, and the panel's
+ * `contain` ancestors trap `position: fixed`, so the view is moved under <body> while filled. Call inside a component.
+ */
+export function windowFill(el: () => HTMLElement | undefined) {
+  const [on, setOn] = createSignal(false)
+  let mark: Comment | null = null
+  // Moving a <video> in the DOM pauses it.
+  const replay = (n: HTMLElement) => n.querySelectorAll("video").forEach((v) => void v.play().catch(() => {}))
+  const enter = () => {
+    const n = el()
+    if (!n || mark) return
+    mark = document.createComment("bot-live-screen")
+    n.replaceWith(mark)
+    Object.assign(n.style, { position: "fixed", inset: "0", zIndex: "40" })
+    document.body.appendChild(n)
+    setOn(true)
+    replay(n)
+  }
+  const exit = () => {
+    const n = el()
+    if (!n || !mark) return
+    Object.assign(n.style, { position: "relative", inset: "", zIndex: "" })
+    mark.replaceWith(n)
+    mark = null
+    setOn(false)
+    replay(n)
+  }
+  // Esc inside the picture belongs to the remote machine.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && on() && !(e.target as Element | null)?.closest?.("[data-bot-screen]")) exit()
+  }
+  document.addEventListener("keydown", onKey)
+  onCleanup(() => {
+    document.removeEventListener("keydown", onKey)
+    if (mark) {
+      el()?.remove()
+      mark.remove()
+      mark = null
+    }
+  })
+  return { on, toggle: () => (on() ? exit() : enter()) }
 }

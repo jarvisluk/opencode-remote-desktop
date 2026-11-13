@@ -30,7 +30,7 @@ Live Screen 侧边栏是 OpenCode Desktop 的一部分，不是一个嵌进去�
 | 动作 | 图标 |
 | --- | --- |
 | 适应面板 | `collapse` |
-| 1:1 / 全屏 | `expand` |
+| 1:1 / 铺满窗口 | `expand` |
 | 放大 / 缩小 | `outline-magnifier-plus` / `outline-magnifier-minus` |
 | 链路信息 | `info` |
 | 刷新 | `outline-rotate-clockwise` |
@@ -89,7 +89,7 @@ Live Screen 侧边栏是 OpenCode Desktop 的一部分，不是一个嵌进去�
 │                                          │
 │                 远程画面                  │
 │                                          │
-│                   [适应][−] 100% [+][全屏] │
+│                   [适应][−] 100% [+][铺满] │
 └──────────────────────────────────────────┘
 ```
 
@@ -104,7 +104,7 @@ Live Screen 侧边栏是 OpenCode Desktop 的一部分，不是一个嵌进去�
 
 - 画面获得焦点后才接收键盘，此时显示 `border-focus` 描边；失焦时按键不发往远端。
 - 触控板捏合 = 本地缩放；普通滚动 = 发往远端。
-- 全屏是整个面板进入全屏，Esc 退出。
+- 「铺满窗口」让画面盖住整个 OpenCode 窗口（不是系统全屏：Desktop 外壳里 HTML 全屏请求永远不会完成），再点一次或在画面外按 Esc 退出；画面有焦点时 Esc 发往远端。
 - 所有图标按钮都有 `Tooltip`，有快捷键的用 `Keybind` 显示。
 
 ## 文案

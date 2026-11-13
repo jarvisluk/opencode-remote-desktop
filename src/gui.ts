@@ -7,7 +7,7 @@ import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
-import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, toggleFullscreen, type Tone } from "./ui.ts"
+import { T, details, floating, iconButton, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 interface LiveFrameState {
   jpegBase64: string
@@ -58,7 +58,6 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
   const [typeText, setTypeText] = createSignal("")
   const [takeoverReason, setTakeoverReason] = createSignal("")
   const [showLink, setShowLink] = createSignal(false)
-  const [fullscreen, setFullscreen] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
 
   let imageRef: HTMLImageElement | null = null
@@ -187,17 +186,13 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
     } catch {}
   }
 
-  const onFullscreenChange = () => setFullscreen(document.fullscreenElement === rootRef)
-
   onMount(() => {
     void refreshWindows()
     void checkTakeovers()
     void fetchNextFrame()
     const takeoverTimer = setInterval(checkTakeovers, 3000)
-    document.addEventListener("fullscreenchange", onFullscreenChange)
     onCleanup(() => {
       clearInterval(takeoverTimer)
-      document.removeEventListener("fullscreenchange", onFullscreenChange)
     })
   })
 
@@ -208,6 +203,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
   })
 
   const server = () => props.session?.server
+  const fill = windowFill(() => rootRef)
   const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
   const summary = () => error() ? `截图 · ${error()}` : !frame() ? "截图连接中" : !streaming() ? "截图 · 已暂停" : `截图 · ${fps()} fps · ${rtt()} ms`
 
@@ -219,6 +215,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
   const element = h("div", { ref: (el: HTMLDivElement) => { rootRef = el }, style: rootStyle() }, [
     h("div", {
       tabIndex: 0,
+      "data-bot-screen": "",
       onMouseDown: (e: MouseEvent) => (e.currentTarget as HTMLElement).focus(),
       onFocus: () => setFocused(true),
       onBlur: () => setFocused(false),
@@ -286,7 +283,7 @@ export function LiveScreenView(props: { session: any; ui: Ui; reason?: string })
         }),
         iconButton(ui, { icon: "outline-eye", label: "暂停 / 继续刷新", onClick: (_e) => setStreaming(!streaming()), pressed: streaming }),
         iconButton(ui, { icon: "keyboard", label: "输入文字（支持输入法）", onClick: (_e) => setTyping(!typing()), pressed: typing }),
-        iconButton(ui, { icon: "expand", label: "全屏（Esc 退出）", onClick: (_e) => toggleFullscreen(rootRef), pressed: fullscreen }),
+        iconButton(ui, { icon: "expand", label: "铺满窗口", onClick: (_e) => fill.toggle(), pressed: fill.on }),
       ]),
     ]),
   ])
