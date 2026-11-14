@@ -240,7 +240,7 @@ test("console link carries server and session but no credentials; viewer registr
   assert.equal(v.hasPanelViewer("s1"), true, "mobile web shows Live Screen as a mobile tab")
   assert.equal(v.needsLink("s1"), false)
   v.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
-  assert.equal(v.needsLink("s1"), true, "the desktop app on the host still needs the link")
+  assert.equal(v.needsLink("s1"), false, "the desktop app on the host itself needs no link")
   assert.equal(v.hasPanelViewer("s1", Date.now() + 60_000), false)
 
   // A desktop app watching another session must not hide this one from a web user.
@@ -250,8 +250,5 @@ test("console link carries server and session but no credentials; viewer registr
   w.beat({ clientId: "w", platform: "web", mobile: false, sessionID: "s1", panel: false })
   assert.equal(w.hasPanelViewer("s1"), false)
   assert.equal(w.needsLink("s1"), true)
-  assert.equal(w.hasDesktopWithoutPanel("s1"), false)
   assert.match(w.describe("s1"), /web — no Live Screen panel/)
-  w.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
-  assert.equal(w.hasDesktopWithoutPanel("s1"), true)
 })

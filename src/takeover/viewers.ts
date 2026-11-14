@@ -29,23 +29,21 @@ export class ViewerRegistry {
     return this.watching(sessionID, now).some((b) => b.panel)
   }
 
-  /** True when the console link should go into the chat: nobody has a panel for this session, or someone watching it lacks one. */
+  /**
+   * True when the user needs the console link: no controller shows Live Screen for this session. A desktop app
+   * without a panel is the app on the host itself, where the screen is already in front of the user.
+   */
   needsLink(sessionID: string, now = Date.now()): boolean {
     const w = this.watching(sessionID, now)
-    return w.length === 0 || w.some((b) => !b.panel)
-  }
-
-  /** True when a desktop app has this session open without a panel, so its in-app browser is in front of the user. */
-  hasDesktopWithoutPanel(sessionID: string, now = Date.now()): boolean {
-    return this.watching(sessionID, now).some((b) => b.platform === "desktop" && !b.panel)
+    return w.length === 0 || (!w.some((b) => b.panel) && w.some((b) => b.platform !== "desktop"))
   }
 
   /** One line for the model describing who is controlling this session. */
   describe(sessionID: string, now = Date.now()): string {
     const w = this.watching(sessionID, now)
-    if (w.length === 0) return "No desktop app with the bot plugin reports this session open, so the user is likely on the web/mobile client, the TUI or a third-party client. None of these has a Live Screen panel (plugin panels load only in the desktop app); takeover goes through the console link posted in the chat."
+    if (w.length === 0) return "No desktop app with the bot plugin reports this session open, so the user is likely on the web/mobile client, the TUI or a third-party client. None of these has a Live Screen panel (plugin panels load only in the desktop app); takeover goes through the console link, which you must give the user."
     const kind = (b: ViewerBeat) =>
-      `${b.platform}${b.mobile ? " (mobile)" : ""} — ${b.panel ? "Live Screen panel available" : "no Live Screen panel"}`
+      `${b.platform}${b.mobile ? " (mobile)" : ""} — ${b.panel ? "Live Screen panel available" : b.platform === "desktop" ? "on the host Mac itself, no panel needed" : "no Live Screen panel"}`
     return `This session is open in: ${w.map(kind).join("; ")}.`
   }
 }

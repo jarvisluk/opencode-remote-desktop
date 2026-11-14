@@ -113,7 +113,12 @@ export function statusCard(p: { title?: TextOrGetter; tone: () => Tone; summary:
   ]) as unknown as JSX.Element
 }
 
-/** Top-right card shown while a human takeover is pending. */
+// Full-width row under the top-left status pill, so a long reason never squeezes against it.
+function belowStatus(): JSX.CSSProperties {
+  return { top: `calc(${T.sp(2)} + var(--bot-inset-top, 0px) + 44px)`, left: T.sp(2), "max-width": "none" }
+}
+
+/** Card under the status pill shown while a human takeover is pending. */
 export function takeoverCard(
   ui: Ui,
   reason: () => string,
@@ -121,9 +126,9 @@ export function takeoverCard(
   labels?: { text?: () => string; resume?: TextOrGetter },
 ): JSX.Element {
   return h("div", {
-    style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
+    style: floating("top-right", { ...belowStatus(), background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}` }),
   }, [
-    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis", "min-width": "0" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
+    h("span", { title: reason, style: { color: T.danger, flex: "1", "min-width": "0", "word-break": "break-word" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
     h("div", { style: { flex: "none", "white-space": "nowrap", display: "flex" } }, [
       h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
     ]),
@@ -134,11 +139,11 @@ export function takeoverCard(
 export function agentCard(ui: Ui, text: () => string, force: () => void, forceLabel: TextOrGetter): JSX.Element {
   return h("div", {
     role: "status",
-    style: floating("top-right", { display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
+    style: floating("top-right", { ...belowStatus(), display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}` }),
   }, [
     h("span", { style: { width: "6px", height: "6px", "border-radius": "50%", flex: "none", background: T.focus, animation: "bot-agent-pulse 1.2s ease-in-out infinite" } }),
     h("style", {}, "@keyframes bot-agent-pulse { 50% { opacity: 0.3 } }"),
-    h("span", { title: text, style: { "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, text),
+    h("span", { title: text, style: { flex: "1", "min-width": "0", "word-break": "break-word" } }, text),
     h(ui.Button, { variant: "danger", size: "small", onClick: (_e: MouseEvent) => force(), children: forceLabel as any }),
   ]) as unknown as JSX.Element
 }
