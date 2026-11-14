@@ -44,7 +44,7 @@
 │  ┌──────────────────────────────────────────────────┐  │
 │  │ opencode-bot Plugin                              │  │
 │  │  - TakeoverManager (挂起/恢复状态机)             │  │
-│  │  - WebTakeoverConsole (轻量内嵌 Web 接管服务)    │  │
+│  │  - BotRpc (面板 / Web 控制台共用的唯一通道)      │  │
 │  │  - RoutineScheduler (全天候后台定时器)           │  │
 │  │  - KeepAwakeController (caffeinate 防休眠)       │  │
 │  └───────────────┬───────────────────┬──────────────┘  │
@@ -86,7 +86,17 @@
 
 ### 斜杠命令 (Slash Commands)
 - `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。
+- `/bot-link`: 给出 Web 控制台链接，在手机/浏览器中打开远程屏幕；链接不含任何凭证，可安全发进会话。
 - `/bot`: 查看 Bot 状态与 Web 控制台入口。
+
+接管时，若控制端没有 Live Screen 面板（手机、未装插件，由 GUI 插件每 15 秒的心跳判断），会自动把控制台链接发进会话；完全没有心跳时，还会提示 agent 用侧边浏览器打开。
+
+### Web / 手机控制台 (Web Console)
+- 一个静态页面（`npm run build:pages` 生成到 `pages/`），部署在 Cloudflare Pages：`npx wrangler pages deploy pages --project-name bot-console`。
+- 页面在浏览器里直接调用 OpenCode 服务器上的插件 RPC（`POST <server>/api/rpc/bot/<method>`），走服务器自带的密码认证和远程访问隧道；插件自己不再开端口。
+- 链接形如 `https://bot-console.pages.dev/#server=<服务器地址>&session=<会话>`，参数放在 `#` 后，不会发给 Pages。首次打开输入 OpenCode 服务器密码，之后保存在该浏览器的 localStorage 中。
+- 服务器地址默认取 OpenCode 远程访问隧道（`opencode service set remote true`），也可用插件选项 `serverUrl` 指定；`consoleUrl` 改页面地址，设为 `""` 关闭链接。
+- 服务器需要允许页面来源跨域：`opencode service set cors https://bot-console.pages.dev`（会重启后台服务）。
 - `/doctor`: 宿主机依赖体检（agent CLI 及版本、原生 sidecar、TCC 权限），给出修复建议。
 - `/takeover`: 手动挂起会话并请求人类接管。
 - `/routine`: 列出或管理例行任务。
@@ -130,7 +140,7 @@ npm run build:native   # 需要 Go 与 swiftc
     {
       "source": "/Users/zippy/codespace/opencode-bot",
       "options": {
-        "consolePort": 49375,
+        "consoleUrl": "https://bot-console.pages.dev",
         "keepAwake": "active",
         "reuseHostBrowser": true,
         "maxImageDimension": 1440,

@@ -13,8 +13,9 @@ import {
 } from "./macos/desktop.ts"
 import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
-import { WebTakeoverConsole } from "./takeover/web-console.ts"
 import { SCREEN_BUSY_DETAIL, ScreenLock, isGuiToolCall } from "./takeover/screen-lock.ts"
+import { consoleLink } from "./console/link.ts"
+import { ViewerRegistry } from "./takeover/viewers.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
@@ -121,7 +122,7 @@ export default Plugin.define({
         ...(item ? { takeoverId: item.id } : {}),
       }
     }
-    const webConsole = new WebTakeoverConsole(options, takeovers, stream, screen, forceTakeover)
+    const viewers = new ViewerRegistry()
     if (!stream) {
       console.warn(
         tServer(locale, "startup.streamUnavailable", {
@@ -146,11 +147,6 @@ export default Plugin.define({
     }
 
     if (isMac) {
-      try {
-        await webConsole.start()
-      } catch (err) {
-        console.error("[bot] Failed to start WebTakeoverConsole, disabling web console feature:", err)
-      }
       routines.start()
     }
 
@@ -160,7 +156,7 @@ export default Plugin.define({
         const summary = await collectBotStatus({
           awake,
           browser,
-          webConsole,
+          options,
           takeovers,
           routines,
           signal: callCtx.signal,
@@ -172,7 +168,7 @@ export default Plugin.define({
           screenRecording: summary.desktop.screenRecording,
           keepAwakeActive: summary.keepAwakeActive,
           browserMode: summary.browserMode,
-          consoleUrls: summary.consoleUrls as string[],
+          streamAvailable: Boolean(stream),
           activeTakeovers: summary.activeTakeovers.length,
           routineCount: summary.routines.length,
         }
@@ -248,6 +244,10 @@ export default Plugin.define({
           })),
         }
       },
+      viewerHeartbeat: async (rawInput) => {
+        viewers.beat(rawInput as { clientId: string; platform: "web" | "desktop"; mobile: boolean })
+        return { ok: true }
+      },
       resolveTakeover: async (rawInput) => {
         const input = rawInput as { sessionID?: string; note?: string }
         const resolved = takeovers.resolveBySession(input.sessionID, input.note, { source: "ui" })
@@ -270,12 +270,24 @@ export default Plugin.define({
 
     const unsubReq = takeovers.onRequested((item) => {
       chatResumedTakeovers.delete(item.sessionID)
+      const url = consoleLink(options, item.sessionID)
       void rpcReg.events.emit("takeoverRequested", {
         id: item.id,
         sessionID: item.sessionID,
         reason: item.reason,
-        consoleUrls: webConsole.getUrls(item.sessionID),
+        ...(url ? { consoleUrl: url } : {}),
       })
+      // Controllers without the Live Screen panel (mobile, no plugin) get the console link in the chat itself.
+      if (url && !viewers.hasPanelViewer()) {
+        void ctx.session
+          .synthetic({
+            sessionID: item.sessionID as any,
+            description: tServer(locale, "takeover.linkDescription"),
+            text: tServer(locale, "takeover.linkText", { reason: item.reason, url }),
+            resume: false,
+          })
+          .catch(() => {})
+      }
     })
     const unsubRes = takeovers.onResolved((item, note, source) => {
       void rpcReg.events.emit("takeoverResolved", {
@@ -343,10 +355,10 @@ export default Plugin.define({
     // 4. Context hook: inform the model about host Mac capabilities & Live Screen takeover workflow (WITHOUT secret tokens)
     const contextHookReg = await ctx.session.hook("context", (event) => {
       if (isMac) {
-        const consoleState = options.consoleEnabled ? "Standalone Web Console also available via /bot." : ""
+        const consoleState = options.consoleUrl ? "Web / mobile console link available via /bot-link." : ""
         event.system.push({
           type: "text",
-          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked. ${consoleState}`.trim(),
+          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). ${consoleState}`.trim(),
         } as any)
       }
       const resumed = chatResumedTakeovers.get(event.sessionID)
@@ -377,14 +389,10 @@ export default Plugin.define({
         options,
         awake,
         browser,
-        webConsole,
         takeovers,
         routines,
         syntheticSessionMessage: async (sessionID, text) => {
           await ctx.session.synthetic({ sessionID: sessionID as any, text, resume: false })
-        },
-        promptSession: async (params) => {
-          await ctx.session.prompt(params)
         },
       })
     })
@@ -396,7 +404,7 @@ export default Plugin.define({
         isMac,
         awake,
         takeovers,
-        webConsole,
+        viewers,
         browser,
         routines,
         permissionAssert: async (params) => {
@@ -416,7 +424,6 @@ export default Plugin.define({
       takeovers.dispose()
       awake.dispose()
       await Promise.allSettled([
-        webConsole.dispose(),
         toolReg.dispose(),
         cmdReg.dispose(),
         skillReg.dispose(),

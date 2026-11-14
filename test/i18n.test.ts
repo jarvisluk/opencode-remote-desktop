@@ -13,7 +13,7 @@ import { SERVER_TABLES, tServer, type ServerMessageKey } from "../src/i18n/serve
 import { WEB_CONSOLE_I18N } from "../src/i18n/web-console.ts"
 import { resolveOptions } from "../src/options.ts"
 import { TakeoverManager } from "../src/takeover/manager.ts"
-import { renderConsoleHtml, WebTakeoverConsole } from "../src/takeover/web-console.ts"
+import { renderConsoleHtml } from "../src/console/page.ts"
 
 test("locale normalization and resolution handles en, zh, zht, and auto", () => {
   assert.equal(normalizeLocale("en"), "en")
@@ -90,29 +90,12 @@ test("Server and Web Console catalogs define identical keys across en, zh, zht",
   assert.deepEqual(Object.keys(WEB_CONSOLE_I18N.zht).sort(), enWebKeys)
 })
 
-test("renderConsoleHtml and WebTakeoverConsole respect locale, Accept-Language, and ?lang=", async () => {
+test("renderConsoleHtml renders the requested locale and talks only to the bot RPC", () => {
   assert.match(renderConsoleHtml("en"), /<html lang="en-US">/)
   assert.match(renderConsoleHtml("zh"), /<html lang="zh-CN">/)
   assert.match(renderConsoleHtml("zht"), /<html lang="zh-TW">/)
-
-  const manager = new TakeoverManager(() => () => {})
-  const opts = resolveOptions({ consoleHost: "127.0.0.1", consolePort: 0 })
-  const consoleServer = new WebTakeoverConsole(opts, manager)
-
-  await consoleServer.start()
-  try {
-    const [localUrl] = consoleServer.getUrls()
-    const zhRes = await fetch(localUrl!, { headers: { "Accept-Language": "zh-CN,zh;q=0.9" } })
-    const zhHtml = await zhRes.text()
-    assert.match(zhHtml, /<html lang="zh-CN">/)
-    assert.match(zhHtml, /Mac 远程控制/)
-
-    const enRes = await fetch(`${localUrl}&lang=en`, { headers: { "Accept-Language": "zh-CN,zh;q=0.9" } })
-    const enHtml = await enRes.text()
-    assert.match(enHtml, /<html lang="en-US">/)
-    assert.match(enHtml, /Mac Remote Control/)
-  } finally {
-    await consoleServer.dispose()
-    manager.dispose()
-  }
+  const html = renderConsoleHtml("zh")
+  assert.match(html, /Mac 远程控制/)
+  assert.match(html, /\/api\/rpc\/bot\//)
+  assert.doesNotMatch(html, /fetch\("\/api\//)
 })

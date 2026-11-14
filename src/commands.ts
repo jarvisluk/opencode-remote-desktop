@@ -2,10 +2,10 @@ import type { CommandEditor, CommandInvocation } from "@opencode/plugin/promise/
 import type { BotOptions } from "./options.ts"
 import type { KeepAwakeController } from "./macos/awake.ts"
 import type { MacBrowserController } from "./macos/browser.ts"
-import type { WebTakeoverConsole } from "./takeover/web-console.ts"
 import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
+import { consoleLink } from "./console/link.ts"
 import { collectDiagnostics, formatDoctorReport, startupWarnings } from "./diagnostics.ts"
 import { resolveLocale, toBcp47 } from "./i18n/locale.ts"
 import { tServer } from "./i18n/server.ts"
@@ -16,14 +16,12 @@ export function registerBotCommands(
     options: BotOptions
     awake: KeepAwakeController
     browser: MacBrowserController
-    webConsole: WebTakeoverConsole
     takeovers: TakeoverManager
     routines: RoutineScheduler
     syntheticSessionMessage: (sessionID: string, text: string) => Promise<void>
-    promptSession: (params: { sessionID: string; delivery?: any; text: string }) => Promise<void>
   },
 ): void {
-  const { options, awake, browser, webConsole, takeovers, routines, syntheticSessionMessage, promptSession } = context
+  const { options, awake, browser, takeovers, routines, syntheticSessionMessage } = context
   const locale = resolveLocale(options.locale)
 
   editor.add({
@@ -33,12 +31,12 @@ export function registerBotCommands(
       const summary = await collectBotStatus({
         awake,
         browser,
-        webConsole,
+        options,
         takeovers,
         routines,
         sessionID,
       })
-      const { desktop, keepAwakeActive, browserMode, consoleUrls, routines: routineList } = summary
+      const { desktop, keepAwakeActive, browserMode, consoleUrl, routines: routineList } = summary
       const healthWarnings = startupWarnings(
         await collectDiagnostics(undefined, { backend: options.streamBackend, locale }),
         locale,
@@ -59,8 +57,8 @@ export function registerBotCommands(
         tServer(locale, "cmd.bot.browserMode", { mode: browserMode }),
         tServer(locale, "cmd.bot.pendingTakeovers", { count: takeovers.size }),
         tServer(locale, "cmd.bot.routines", { count: routineList.length }),
-        consoleUrls.length > 0
-          ? tServer(locale, "cmd.bot.consoleUrls", { urls: consoleUrls.map((u) => `  - ${u}`).join("\n") })
+        consoleUrl
+          ? tServer(locale, "cmd.bot.consoleUrl", { url: consoleUrl })
           : tServer(locale, "cmd.bot.consoleDisabled"),
         healthWarnings.length > 0
           ? tServer(locale, "cmd.bot.healthWarn", { count: healthWarnings.length })
@@ -79,7 +77,7 @@ export function registerBotCommands(
         collectBotStatus({
           awake,
           browser,
-          webConsole,
+          options,
           takeovers,
           routines,
           sessionID,
@@ -92,15 +90,14 @@ export function registerBotCommands(
   })
 
   editor.add({
-    name: "screen",
+    name: "bot-link",
     description: tServer(locale, "cmd.screen.description"),
-    execute: async ({ sessionID, delivery }: CommandInvocation) => {
-      const urls = webConsole.getUrls(sessionID)
-      await promptSession({
+    execute: async ({ sessionID }: CommandInvocation) => {
+      const url = consoleLink(options, sessionID, true)
+      await syntheticSessionMessage(
         sessionID,
-        delivery,
-        text: tServer(locale, "cmd.screen.prompt", { urls: urls.join("\n") }),
-      })
+        url ? tServer(locale, "cmd.screen.prompt", { url }) : tServer(locale, "cmd.bot.consoleDisabled"),
+      )
     },
   })
 
@@ -111,10 +108,9 @@ export function registerBotCommands(
       const arg = (prompt.text ?? "").trim()
       if (!arg || arg === "list") {
         const items = takeovers.list()
-        const urls = webConsole.getUrls(sessionID)
         const body =
           items.length === 0
-            ? tServer(locale, "cmd.takeover.empty", { urls: urls.join(" | ") })
+            ? tServer(locale, "cmd.takeover.empty", { url: consoleLink(options, sessionID) ?? "-" })
             : items
                 .map((t) => tServer(locale, "cmd.takeover.item", { id: t.id, sessionID: t.sessionID, reason: t.reason }))
                 .join("\n") + tServer(locale, "cmd.takeover.footer")
