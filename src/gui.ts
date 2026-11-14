@@ -12,6 +12,9 @@ import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, 
 
 const DEFAULT_T = createGuiTranslator("en")
 
+const CLIENT_ID = crypto.randomUUID()
+const isNarrow = () => window.matchMedia("(max-width: 767px)").matches
+
 type ErrorState = { key?: GuiMessageKey; detail?: string } | null
 
 interface LiveFrameState {
@@ -535,6 +538,14 @@ export default Plugin.define({
       }
       void syncInitial()
 
+      // Tell the host this controller has the Live Screen panel, so it skips posting a link into the chat.
+      const beat = () =>
+        void rpc
+          .viewerHeartbeat({ clientId: CLIENT_ID, platform: ctx.app.platform, mobile: isNarrow() })
+          .catch(() => {})
+      beat()
+      const beatTimer = setInterval(beat, 15_000)
+
       const unsubReq = rpc.events.on("takeoverRequested", (ev) => {
         if (disposed) return
         const data = ev.data as { id: string; sessionID: string; reason: string }
@@ -548,6 +559,7 @@ export default Plugin.define({
 
       watchedServers.set(server.id, () => {
         disposed = true
+        clearInterval(beatTimer)
         unsubReq()
         unsubRes()
       })

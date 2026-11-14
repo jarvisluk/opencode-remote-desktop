@@ -10,8 +10,8 @@ import { registerBotTools } from "../src/tools.ts"
 
 test("options resolver applies sensible defaults", () => {
   const opts = resolveOptions(undefined)
-  assert.equal(opts.consoleHost, "0.0.0.0")
-  assert.equal(opts.consolePort, 49375)
+  assert.equal(opts.consoleUrl, "https://bot-console.pages.dev")
+  assert.equal(opts.serverUrl, undefined)
   assert.equal(opts.keepAwake, "active")
   assert.equal(opts.reuseHostBrowser, true)
   assert.equal(opts.maxImageDimension, 1440)
@@ -21,23 +21,21 @@ test("options resolver applies sensible defaults", () => {
 
 test("options resolver sanitizes bounded numbers and strings", () => {
   const opts = resolveOptions({
-    consoleHost: " 127.0.0.1 ",
-    consolePort: 58888,
+    consoleUrl: "https://console.example.com/",
     keepAwake: "always",
     reuseHostBrowser: false,
     maxImageDimension: 8000,
     jpegQuality: 5,
     routinePollMs: 1000,
-    publicBaseUrl: "https://tunnel.example.com///",
+    serverUrl: "https://tunnel.example.com///",
   })
-  assert.equal(opts.consoleHost, "127.0.0.1")
-  assert.equal(opts.consolePort, 58888)
+  assert.equal(opts.consoleUrl, "https://console.example.com")
   assert.equal(opts.keepAwake, "always")
   assert.equal(opts.reuseHostBrowser, false)
   assert.equal(opts.maxImageDimension, 3840) // capped
   assert.equal(opts.jpegQuality, 20) // bounded min
   assert.equal(opts.routinePollMs, 30000) // bounded min
-  assert.equal(opts.publicBaseUrl, "https://tunnel.example.com")
+  assert.equal(opts.serverUrl, "https://tunnel.example.com")
 })
 
 test("routine next run calculation handles intervals and daily time", () => {
@@ -160,13 +158,12 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
   } as any
 
   const manager = new TakeoverManager(() => () => {})
-  const opts = resolveOptions(undefined)
+  const opts = resolveOptions({ serverUrl: "https://srv.example.com" })
   registerBotTools(editor, {
     options: opts,
     isMac: true,
     awake: { isHeld: () => false } as any,
     takeovers: manager,
-    webConsole: { getUrls: () => ["http://127.0.0.1:49375/?token=secret-token&session=ses_1"] } as any,
     browser: { inspect: async () => ({ mode: "cdp" }), run: async () => ({ ok: true }) } as any,
     routines: { list: () => [] } as any,
     permissionAssert: async () => {},
@@ -209,4 +206,37 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
   assert.equal(browserUnblocked.content.includes("Action blocked: human takeover"), false)
 
   manager.dispose()
+})
+
+test("console link carries server and session but no credentials; viewer registry tracks panels", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { consoleLink, detectTunnelUrl } = await import("../src/console/link.ts")
+  const { ViewerRegistry } = await import("../src/takeover/viewers.ts")
+
+  const url = new URL(consoleLink(resolveOptions({ serverUrl: "https://srv.example.com" }), "ses_1")!)
+  assert.equal(url.origin, "https://bot-console.pages.dev")
+  const hash = new URLSearchParams(url.hash.slice(1))
+  assert.equal(hash.get("server"), "https://srv.example.com")
+  assert.equal(hash.get("session"), "ses_1")
+  assert.equal(url.search, "")
+  assert.equal(consoleLink(resolveOptions({ consoleUrl: "", serverUrl: "https://srv.example.com" })), undefined)
+
+  const root = mkdtempSync(join(tmpdir(), "bot-tunnel-"))
+  const env = { XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data") }
+  assert.equal(detectTunnelUrl(env), undefined)
+  mkdirSync(join(env.XDG_CONFIG_HOME, "opencode"), { recursive: true })
+  mkdirSync(join(env.XDG_DATA_HOME, "opentunnel", "default"), { recursive: true })
+  writeFileSync(join(env.XDG_CONFIG_HOME, "opencode", "service.json"), JSON.stringify({ password: "x", remote: { route: "abc" } }))
+  writeFileSync(join(env.XDG_DATA_HOME, "opentunnel", "default", "tunnel.json"), JSON.stringify({ hostname: "h.opentunnel.xyz" }))
+  assert.equal(detectTunnelUrl(env), "https://abc.h.opentunnel.xyz")
+
+  const v = new ViewerRegistry()
+  assert.equal(v.isUnknown(), true)
+  v.beat({ clientId: "m", platform: "web", mobile: true })
+  assert.equal(v.hasPanelViewer(), false)
+  v.beat({ clientId: "d", platform: "desktop", mobile: false })
+  assert.equal(v.hasPanelViewer(), true)
+  assert.equal(v.hasPanelViewer(Date.now() + 60_000), false)
 })

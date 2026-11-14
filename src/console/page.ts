@@ -1,340 +1,5 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { networkInterfaces } from "node:os"
-import { randomBytes, timingSafeEqual } from "node:crypto"
-import type { BotOptions } from "../options.ts"
-import {
-  captureScreenJpeg,
-  injectRemoteInput,
-  listWindows,
-  REMOTE_INPUT_KINDS,
-  type RemoteInputKind,
-} from "../macos/desktop.ts"
-import type { StreamSidecar } from "../stream/sidecar.ts"
-import type { TakeoverManager } from "./manager.ts"
-import { normalizeLocale, parseAcceptLanguage, resolveLocale, toBcp47, type SupportedLocale } from "../i18n/locale.ts"
+import { toBcp47, type SupportedLocale } from "../i18n/locale.ts"
 import { WEB_CONSOLE_I18N } from "../i18n/web-console.ts"
-
-const COOKIE_NAME = "bot_auth"
-
-function safeTokenEquals(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "utf8")
-  const bufB = Buffer.from(b, "utf8")
-  if (bufA.length !== bufB.length) return false
-  return timingSafeEqual(bufA, bufB)
-}
-
-function parseCookies(header: string | undefined): Record<string, string> {
-  if (!header) return {}
-  const out: Record<string, string> = {}
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=")
-    if (idx <= 0) continue
-    const k = part.slice(0, idx).trim()
-    const v = part.slice(idx + 1).trim()
-    out[k] = decodeURIComponent(v)
-  }
-  return out
-}
-
-function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length
-      if (total > maxBytes) {
-        req.destroy()
-        reject(new Error("Payload too large"))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf8").trim()
-      if (!raw) {
-        resolve({})
-        return
-      }
-      try {
-        resolve(JSON.parse(raw) as Record<string, unknown>)
-      } catch (err) {
-        reject(err)
-      }
-    })
-    req.on("error", reject)
-  })
-}
-
-const BLOCKED_IFACE_PREFIXES = ["awdl", "llw", "anpi", "bridge", "vmenet", "ap", "gif", "stf"]
-
-export function filterHostAddress(ifaceName: string, address: string): boolean {
-  for (const prefix of BLOCKED_IFACE_PREFIXES) {
-    if (ifaceName.startsWith(prefix)) return false
-  }
-  const octets = address.split(".").map(Number)
-  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return false
-  // Drop network/broadcast addresses (.0 / .255), link-local (169.254.0.0/16), and proxy TUN fake-ip (198.18.0.0/15).
-  if (octets[3] === 0 || octets[3] === 255) return false
-  if (octets[0] === 169 && octets[1] === 254) return false
-  if (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) return false
-  return true
-}
-
-function discoverHostAddresses(bindHost: string): string[] {
-  if (bindHost === "127.0.0.1" || bindHost === "localhost" || bindHost === "::1") {
-    return ["127.0.0.1"]
-  }
-  const tailscaleIps: string[] = []
-  const lanIps: string[] = []
-  const nets = networkInterfaces()
-  for (const [ifaceName, entries] of Object.entries(nets)) {
-    if (!entries) continue
-    for (const net of entries) {
-      if (net.family !== "IPv4" || net.internal) continue
-      if (!filterHostAddress(ifaceName, net.address)) continue
-      // Tailscale CGNAT range 100.64.0.0/10
-      const octets = net.address.split(".").map(Number)
-      if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) {
-        tailscaleIps.push(net.address)
-      } else {
-        lanIps.push(net.address)
-      }
-    }
-  }
-  // Order: Tailscale first (best for remote Web/Mobile), then LAN, then localhost
-  return [...new Set([...tailscaleIps, ...lanIps, "127.0.0.1"])]
-}
-
-export class WebTakeoverConsole {
-  private server: Server | null = null
-  private boundPort: number | null = null
-  private readonly token = randomBytes(24).toString("base64url")
-  private readonly options: BotOptions
-  private readonly takeovers: TakeoverManager
-  private readonly stream: StreamSidecar | null
-
-  constructor(options: BotOptions, takeovers: TakeoverManager, stream: StreamSidecar | null = null) {
-    this.options = options
-    this.takeovers = takeovers
-    this.stream = stream
-  }
-
-  async start(): Promise<void> {
-    if (!this.options.consoleEnabled || this.server) return
-
-    const srv = createServer((req, res) => {
-      void this.handleRequest(req, res)
-    })
-
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE" && this.options.consolePort !== 0) {
-          srv.off("error", onError)
-          srv.listen(0, this.options.consoleHost, () => resolve())
-          return
-        }
-        reject(err)
-      }
-      srv.once("error", onError)
-      srv.listen(this.options.consolePort, this.options.consoleHost, () => {
-        srv.off("error", onError)
-        resolve()
-      })
-    })
-
-    const addr = srv.address()
-    this.boundPort = typeof addr === "object" && addr ? addr.port : this.options.consolePort
-    this.server = srv
-  }
-
-  async dispose(): Promise<void> {
-    if (!this.server) return
-    const srv = this.server
-    this.server = null
-    this.boundPort = null
-    await new Promise<void>((resolve) => srv.close(() => resolve()))
-  }
-
-  getUrls(sessionID?: string): string[] {
-    if (!this.server || !this.boundPort) return []
-    const suffix = sessionID
-      ? `/?token=${encodeURIComponent(this.token)}&session=${encodeURIComponent(sessionID)}`
-      : `/?token=${encodeURIComponent(this.token)}`
-
-    const urls: string[] = []
-    if (this.options.publicBaseUrl) {
-      urls.push(`${this.options.publicBaseUrl}${suffix}`)
-    }
-    for (const host of discoverHostAddresses(this.options.consoleHost)) {
-      urls.push(`http://${host}:${this.boundPort}${suffix}`)
-    }
-    return urls
-  }
-
-  private isAuthenticated(req: IncomingMessage, url: URL): { readonly ok: boolean; readonly fromQuery: boolean } {
-    const queryToken = url.searchParams.get("token")
-    if (queryToken && safeTokenEquals(queryToken, this.token)) {
-      return { ok: true, fromQuery: true }
-    }
-    const headerToken = req.headers["x-bot-token"]
-    if (typeof headerToken === "string" && safeTokenEquals(headerToken, this.token)) {
-      return { ok: true, fromQuery: false }
-    }
-    const cookies = parseCookies(req.headers.cookie)
-    if (cookies[COOKIE_NAME] && safeTokenEquals(cookies[COOKIE_NAME], this.token)) {
-      return { ok: true, fromQuery: false }
-    }
-    return { ok: false, fromQuery: false }
-  }
-
-  private resolveRequestLocale(req: IncomingMessage, url: URL): SupportedLocale {
-    const queryLang = url.searchParams.get("lang")
-    if (queryLang) return normalizeLocale(queryLang)
-    if (this.options.locale !== "auto") return this.options.locale
-    return parseAcceptLanguage(req.headers["accept-language"]) ?? resolveLocale(this.options.locale)
-  }
-
-  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    try {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`)
-      const reqLocale = this.resolveRequestLocale(req, url)
-      const auth = this.isAuthenticated(req, url)
-      if (!auth.ok) {
-        res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" })
-        res.end(WEB_CONSOLE_I18N[reqLocale].unauthorized)
-        return
-      }
-
-      if (auth.fromQuery) {
-        res.setHeader(
-          "Set-Cookie",
-          `${COOKIE_NAME}=${encodeURIComponent(this.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
-        )
-      }
-
-      if (req.method === "GET" && url.pathname === "/") {
-        res.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-        })
-        res.end(renderConsoleHtml(reqLocale))
-        return
-      }
-
-      if (req.method === "GET" && url.pathname === "/api/state") {
-        const windows = await listWindows()
-        const payload = {
-          streamAvailable: Boolean(this.stream),
-          takeovers: this.takeovers.list(),
-          windows: windows.map((w) => ({
-            id: w.id,
-            appName: w.appName,
-            title: w.title,
-            isFocused: w.isFocused,
-            bounds: w.bounds,
-          })),
-        }
-        res.writeHead(200, {
-          "Content-Type": "application/json; charset=utf-8",
-          "Cache-Control": "no-store",
-        })
-        res.end(JSON.stringify(payload))
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/stream/offer") {
-        if (!this.stream) {
-          res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" })
-          res.end(JSON.stringify({ ok: false, error: "WebRTC stream sidecar unavailable" }))
-          return
-        }
-        const body = await readJsonBody(req, 128 * 1024)
-        const sdp = typeof body.sdp === "string" ? body.sdp : ""
-        if (!sdp) {
-          res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" })
-          res.end(JSON.stringify({ ok: false, error: "Missing SDP offer" }))
-          return
-        }
-        const answer = await this.stream.offer(sdp)
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
-        res.end(JSON.stringify(answer))
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/stream/close") {
-        const body = await readJsonBody(req)
-        const session = typeof body.session === "string" ? body.session : ""
-        if (this.stream && session) {
-          await this.stream.close(session)
-        }
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
-        res.end(JSON.stringify({ ok: true }))
-        return
-      }
-
-      if (req.method === "GET" && url.pathname === "/api/frame") {
-        const windowId = url.searchParams.get("windowId") || undefined
-        const maxDim = Number(url.searchParams.get("maxDim") || this.options.maxImageDimension)
-        const quality = Number(url.searchParams.get("quality") || 65)
-        const frame = await captureScreenJpeg({
-          windowId,
-          maxDimension: Number.isFinite(maxDim) ? Math.max(640, Math.min(2560, maxDim)) : 1280,
-          quality: Number.isFinite(quality) ? Math.max(30, Math.min(90, quality)) : 65,
-        })
-        res.writeHead(200, {
-          "Content-Type": "image/jpeg",
-          "Cache-Control": "no-store",
-          "X-Image-Width": String(frame.imageWidth),
-          "X-Image-Height": String(frame.imageHeight),
-          "X-Logical-X": String(frame.logicalX),
-          "X-Logical-Y": String(frame.logicalY),
-          "X-Logical-Width": String(frame.logicalWidth),
-          "X-Logical-Height": String(frame.logicalHeight),
-        })
-        res.end(frame.jpegBuffer)
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/input") {
-        const body = await readJsonBody(req)
-        const kind = String(body.kind ?? "") as RemoteInputKind
-        if (!REMOTE_INPUT_KINDS.includes(kind)) {
-          res.writeHead(400, { "Content-Type": "application/json" })
-          res.end(JSON.stringify({ ok: false, detail: "Invalid input kind" }))
-          return
-        }
-        const out = await injectRemoteInput({
-          kind,
-          x: typeof body.x === "number" ? body.x : undefined,
-          y: typeof body.y === "number" ? body.y : undefined,
-          deltaY: typeof body.deltaY === "number" ? body.deltaY : undefined,
-          text: typeof body.text === "string" ? body.text : undefined,
-          key: typeof body.key === "string" ? body.key : undefined,
-          app: typeof body.app === "string" ? body.app : undefined,
-        })
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
-        res.end(JSON.stringify(out))
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/resolve") {
-        const body = await readJsonBody(req)
-        const sessionID = typeof body.sessionID === "string" && body.sessionID ? body.sessionID : undefined
-        const note = typeof body.note === "string" && body.note ? body.note : undefined
-        const resolved = this.takeovers.resolveBySession(sessionID, note, { source: "ui" })
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
-        res.end(JSON.stringify({ ok: true, resolved: resolved.length }))
-        return
-      }
-
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" })
-      res.end("Not Found")
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" })
-      res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
-    }
-  }
-}
 
 export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string {
   const s = WEB_CONSOLE_I18N[defaultLocale] ?? WEB_CONSOLE_I18N.en
@@ -650,6 +315,42 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       .dot { animation: none; opacity: 0.6; }
       #handle, #topbar, #dock { transition: none; }
     }
+
+    /* 连接表单 */
+    #login {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: #000;
+    }
+    #loginForm {
+      width: min(360px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 20px;
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      background: var(--glass);
+      box-shadow: var(--shadow);
+    }
+    #loginForm h1 { margin: 0 0 4px; font-size: 15px; line-height: 22px; font-weight: 600; }
+    #loginForm label { display: flex; flex-direction: column; gap: 4px; color: var(--text-base); }
+    #loginForm input {
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-strong);
+      font-size: 16px;
+    }
+    #loginError { margin: 0; color: var(--critical); min-height: 20px; }
+    #loginForm .hint { margin: 0; color: var(--text-weak); font-size: 12px; line-height: 18px; }
   </style>
 </head>
 <body data-top="closed" data-dock="closed">
@@ -734,16 +435,38 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
     </div>
   </div>
 
+  <div id="login" hidden>
+    <form id="loginForm" autocomplete="on">
+      <h1 data-i18n="loginTitle">${s.loginTitle}</h1>
+      <label><span data-i18n="loginServer">${s.loginServer}</span>
+        <input id="loginServer" name="url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…" required />
+      </label>
+      <input name="username" type="text" autocomplete="username" value="opencode" hidden />
+      <label><span data-i18n="loginPassword">${s.loginPassword}</span>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <p id="loginError" role="alert"></p>
+      <button class="btn-primary" type="submit" data-i18n="loginSubmit">${s.loginSubmit}</button>
+      <p class="hint" data-i18n="loginHint">${s.loginHint}</p>
+    </form>
+  </div>
+
   <script>
     (() => {
       const I18N = ${dictJson};
       const DEFAULT_LOCALE = ${localeJson};
-      const params = new URLSearchParams(location.search);
+      // Links carry server and session in the fragment, which browsers never send to the page host.
+      const params = new URLSearchParams(location.hash.slice(1) || location.search);
       const targetSession = params.get("session") || "";
-      if (params.has("token")) {
-        params.delete("token");
-        const clean = location.pathname + (params.toString() ? "?" + params.toString() : "");
-        history.replaceState(null, "", clean);
+      const username = params.get("user") || "opencode";
+      let server = (params.get("server") || localStorage.getItem("bot-console:server") || "").replace(/\\/+$/, "");
+      let auth = server ? localStorage.getItem("bot-console:auth:" + server) || "" : "";
+      // A pairing link (/bot-link) carries the connection key as base64(user:password); keep it and wipe it from the address bar.
+      if (params.get("auth") && server) {
+        auth = "Basic " + params.get("auth");
+        localStorage.setItem("bot-console:server", server);
+        localStorage.setItem("bot-console:auth:" + server, auth);
+        history.replaceState(null, "", location.pathname + "#" + new URLSearchParams({ server, ...(targetSession ? { session: targetSession } : {}) }));
       }
 
       function normalizeLang(raw) {
@@ -755,7 +478,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
         return null;
       }
 
-      const locale = normalizeLang(params.get("lang")) || DEFAULT_LOCALE || "en";
+      const locale = normalizeLang(params.get("lang")) || normalizeLang(navigator.language) || DEFAULT_LOCALE || "en";
       const msgs = I18N[locale] || I18N.en;
       document.documentElement.lang = locale === "zh" ? "zh-CN" : locale === "zht" ? "zh-TW" : "en-US";
       document.title = msgs.pageTitle;
@@ -775,6 +498,63 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       document.querySelectorAll("[data-i18n-alt]").forEach((el) => { el.alt = t(el.dataset.i18nAlt); });
 
       const $ = (id) => document.getElementById(id);
+
+      function basicAuth(user, password) {
+        const bytes = new TextEncoder().encode(user + ":" + password);
+        let bin = "";
+        bytes.forEach((b) => { bin += String.fromCharCode(b); });
+        return "Basic " + btoa(bin);
+      }
+
+      // All control goes through the plugin's RPC on the OpenCode server itself.
+      async function rpc(method, input, keepalive) {
+        const res = await fetch(server + "/api/rpc/bot/" + method, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: auth },
+          body: JSON.stringify({ input: input || {} }),
+          cache: "no-store",
+          keepalive: Boolean(keepalive),
+        });
+        if (res.status === 401) {
+          showLogin(t("loginBadPassword"));
+          throw new Error("HTTP 401");
+        }
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || !("output" in data)) {
+          throw new Error((data && (data.message || (data.error && data.error.message))) || "HTTP " + res.status);
+        }
+        return data.output;
+      }
+
+      let started = false;
+      function showLogin(error) {
+        $("login").hidden = false;
+        $("loginServer").value = server;
+        $("loginError").textContent = error || "";
+        (server ? $("loginPassword") : $("loginServer")).focus();
+      }
+
+      async function connect() {
+        try {
+          const status = await rpc("status");
+          streamAvailable = rtcSupported && status.streamAvailable;
+          $("login").hidden = true;
+          if (!started) { started = true; start(); }
+        } catch (e) {
+          if ($("login").hidden) showLogin(t("loginUnreachable", { error: e.message }));
+        }
+      }
+
+      $("loginForm").addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        server = $("loginServer").value.trim().replace(/\\/+$/, "");
+        auth = basicAuth(username, $("loginPassword").value);
+        $("loginPassword").value = "";
+        $("loginError").textContent = "";
+        localStorage.setItem("bot-console:server", server);
+        localStorage.setItem("bot-console:auth:" + server, auth);
+        connect();
+      });
       const video = $("screenVideo");
       const img = $("screenImg");
       const wrap = $("screenWrap");
@@ -794,7 +574,6 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       let clickMode = "click";
       let logical = { x: 0, y: 0, w: 1920, h: 1080 };
       let lastPoint = { x: 960, y: 540 };
-      let prevBlobUrl = null;
       let inFlight = false;
       let timer = null;
       let continuousStop = true;
@@ -869,12 +648,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
         if (rtcSession) {
           const sid = rtcSession;
           rtcSession = null;
-          fetch("/api/stream/close", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session: sid }),
-            keepalive: true,
-          }).catch(() => {});
+          rpc("streamClose", { session: sid }, true).catch(() => {});
         }
         if (!silent) showMode("jpeg");
       }
@@ -951,24 +725,9 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
             return fallbackToJpeg(t("webrtcNoCandidates"));
           }
 
-          const res = await fetch("/api/stream/offer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sdp: offerSdp }),
-          });
-          if (res.status === 503) {
-            streamAvailable = false;
-            return fallbackToJpeg(t("webrtcServerDisabled"));
-          }
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          const ans = await res.json();
+          const ans = await rpc("streamOffer", { sdp: offerSdp });
           if (gen !== rtcGen) {
-            fetch("/api/stream/close", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ session: ans.session }),
-              keepalive: true,
-            }).catch(() => {});
+            rpc("streamClose", { session: ans.session }, true).catch(() => {});
             return;
           }
           rtcSession = ans.session;
@@ -1062,22 +821,11 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
           const t0 = performance.now();
           const winId = windowSelect.value;
           const dim = Math.max(1280, Math.min(1920, Math.round(Math.max(screen.width, screen.height) * Math.min(devicePixelRatio || 1, 2))));
-          const q = "?maxDim=" + dim + (winId ? "&windowId=" + encodeURIComponent(winId) : "");
-          const res = await fetch("/api/frame" + q, { cache: "no-store" });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          logical = {
-            x: Number(res.headers.get("X-Logical-X") || 0),
-            y: Number(res.headers.get("X-Logical-Y") || 0),
-            w: Number(res.headers.get("X-Logical-Width") || 1920),
-            h: Number(res.headers.get("X-Logical-Height") || 1080),
-          };
-          const blob = await res.blob();
-          const nextUrl = URL.createObjectURL(blob);
-          img.src = nextUrl;
+          const frame = await rpc("frame", winId ? { maxDimension: dim, quality: 65, windowId: winId } : { maxDimension: dim, quality: 65 });
+          logical = { x: frame.logicalX, y: frame.logicalY, w: frame.logicalWidth, h: frame.logicalHeight };
+          img.src = "data:image/jpeg;base64," + frame.jpegBase64;
           showMode("jpeg");
           placeholder.hidden = true;
-          if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
-          prevBlobUrl = nextUrl;
           const ms = Math.round(performance.now() - t0);
           if (statusDot.dataset.state !== "busy") setStatus("JPEG · " + Math.round(logical.w) + " × " + Math.round(logical.h) + " · " + ms + " ms", "online");
         } catch (e) {
@@ -1089,14 +837,10 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
 
       async function fetchState() {
         try {
-          const res = await fetch("/api/state", { cache: "no-store" });
-          if (!res.ok) return;
-          const data = await res.json();
-          if (typeof data.streamAvailable === "boolean") {
-            streamAvailable = data.streamAvailable && rtcSupported;
-            const rtcOpt = fpsSelect.querySelector('option[value="webrtc"]');
-            if (rtcOpt) rtcOpt.disabled = !streamAvailable;
-          }
+          const [win, tk] = await Promise.all([rpc("listWindows"), rpc("listTakeovers")]);
+          const data = { windows: win.windows, takeovers: tk.items };
+          const rtcOpt = fpsSelect.querySelector('option[value="webrtc"]');
+          if (rtcOpt) rtcOpt.disabled = !streamAvailable;
           if (document.activeElement !== windowSelect) {
             const currentVal = windowSelect.value;
             const esc = (str) => String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1158,12 +902,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
         setStatus(t("sending"), "busy");
         wake();
         try {
-          const res = await fetch("/api/input", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const out = await res.json();
+          const out = await rpc("sendInput", payload);
           setStatus(out.ok ? (out.detail || t("sent")) : t("sendFailedPrefix", { detail: out.detail || "" }), out.ok ? "online" : "error");
           if (fpsSelect.value !== "webrtc") setTimeout(fetchFrame, 120);
         } catch (e) {
@@ -1390,15 +1129,12 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
 
       $("resumeBtn").addEventListener("click", async () => {
         const sid = banner.dataset.session || targetSession || undefined;
-        await fetch("/api/resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionID: sid, note: "User completed takeover via Web Console" }),
-        });
+        await rpc("resolveTakeover", sid ? { sessionID: sid, note: "User completed takeover via Web Console" } : { note: "User completed takeover via Web Console" });
         await fetchState();
         setStatus(t("handedBackToAi"), "online");
       });
 
+      function start() {
       fetchState().then(() => {
         if (streamAvailable && !windowSelect.value) {
           startWebRtc();
@@ -1409,6 +1145,10 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
         }
       });
       setInterval(fetchState, 3000);
+      }
+
+      if (server && auth) connect();
+      else showLogin("");
     })();
   </script>
 </body>

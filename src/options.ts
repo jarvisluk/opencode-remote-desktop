@@ -8,14 +8,10 @@ export interface BotOptions {
   readonly locale: LocalePreference
   /** Expose this machine as a controllable host. Set false on a controller machine that only needs the Live Screen sidebar. Default: true. */
   readonly host: boolean
-  /** Bind address for the Web/Mobile Takeover Console. Default: "0.0.0.0" (reachable via LAN/Tailscale with token). */
-  readonly consoleHost: string
-  /** Port for the Web/Mobile Takeover Console. Set 0 for OS-assigned port. Default: 49375. */
-  readonly consolePort: number
-  /** Enable the standalone Web/Mobile Takeover Console HTTP server. Default: true. */
-  readonly consoleEnabled: boolean
-  /** Optional external tunnel base URL (e.g. Cloudflare Tunnel / Tailscale Funnel) pointing to consolePort. */
-  readonly publicBaseUrl?: string
+  /** Static Web/Mobile console page (see pages/). "" disables console links. Default: "https://bot-console.pages.dev". */
+  readonly consoleUrl: string
+  /** Public URL of this OpenCode server that the console page calls. Default: the OpenCode remote-access tunnel URL, if set up. */
+  readonly serverUrl?: string
   /** Prevent macOS from sleeping via `caffeinate -di`. Default: "active" (awake during takeovers & routines). */
   readonly keepAwake: KeepAwakeMode
   /** Reuse host's signed-in Microsoft Edge / Chrome via DevToolsActivePort when available. Default: true. */
@@ -52,10 +48,6 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
       ? keepAwakeRaw
       : "active"
 
-  const port = typeof opts.consolePort === "number" && Number.isInteger(opts.consolePort) && opts.consolePort >= 0
-    ? opts.consolePort
-    : 49375
-
   const maxDim = typeof opts.maxImageDimension === "number" && opts.maxImageDimension >= 480
     ? Math.min(3840, Math.round(opts.maxImageDimension))
     : 1440
@@ -71,11 +63,11 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
   return {
     locale: parseLocalePreference(opts.locale),
     host: opts.host !== false,
-    consoleHost: typeof opts.consoleHost === "string" && opts.consoleHost.trim() ? opts.consoleHost.trim() : "0.0.0.0",
-    consolePort: port,
-    consoleEnabled: opts.consoleEnabled !== false,
-    publicBaseUrl: typeof opts.publicBaseUrl === "string" && opts.publicBaseUrl.trim()
-      ? opts.publicBaseUrl.trim().replace(/\/+$/, "")
+    consoleUrl: typeof opts.consoleUrl === "string"
+      ? opts.consoleUrl.trim().replace(/\/+$/, "")
+      : "https://bot-console.pages.dev",
+    serverUrl: typeof opts.serverUrl === "string" && opts.serverUrl.trim()
+      ? opts.serverUrl.trim().replace(/\/+$/, "")
       : undefined,
     keepAwake,
     reuseHostBrowser: opts.reuseHostBrowser !== false,
