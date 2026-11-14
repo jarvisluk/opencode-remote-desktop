@@ -20,10 +20,9 @@ export function registerBotCommands(
     takeovers: TakeoverManager
     routines: RoutineScheduler
     syntheticSessionMessage: (sessionID: string, text: string) => Promise<void>
-    promptSession: (params: { sessionID: string; delivery?: any; text: string }) => Promise<void>
   },
 ): void {
-  const { options, awake, browser, webConsole, takeovers, routines, syntheticSessionMessage, promptSession } = context
+  const { options, awake, browser, webConsole, takeovers, routines, syntheticSessionMessage } = context
   const locale = resolveLocale(options.locale)
 
   editor.add({
@@ -92,15 +91,14 @@ export function registerBotCommands(
   })
 
   editor.add({
-    name: "screen",
+    name: "bot-link",
     description: tServer(locale, "cmd.screen.description"),
-    execute: async ({ sessionID, delivery }: CommandInvocation) => {
-      const urls = webConsole.getUrls(sessionID)
-      await promptSession({
+    execute: async ({ sessionID }: CommandInvocation) => {
+      const urls = webConsole.getShareUrls(sessionID)
+      await syntheticSessionMessage(
         sessionID,
-        delivery,
-        text: tServer(locale, "cmd.screen.prompt", { urls: urls.join("\n") }),
-      })
+        urls.length > 0 ? tServer(locale, "cmd.screen.prompt", { urls: urls.map((u) => `- ${u}`).join("\n") }) : tServer(locale, "cmd.bot.consoleDisabled"),
+      )
     },
   })
 
@@ -111,7 +109,7 @@ export function registerBotCommands(
       const arg = (prompt.text ?? "").trim()
       if (!arg || arg === "list") {
         const items = takeovers.list()
-        const urls = webConsole.getUrls(sessionID)
+        const urls = webConsole.getShareUrls(sessionID)
         const body =
           items.length === 0
             ? tServer(locale, "cmd.takeover.empty", { urls: urls.join(" | ") })

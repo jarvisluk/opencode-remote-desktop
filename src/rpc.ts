@@ -200,6 +200,24 @@ export const BotRpc = Rpc.define({
         additionalProperties: false,
       },
     },
+    viewerHeartbeat: {
+      input: {
+        type: "object",
+        properties: {
+          clientId: { type: "string" },
+          platform: { type: "string", enum: ["web", "desktop"] },
+          mobile: { type: "boolean" },
+        },
+        required: ["clientId", "platform", "mobile"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
     resolveTakeover: {
       input: {
         type: "object",

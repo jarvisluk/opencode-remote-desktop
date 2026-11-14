@@ -45,6 +45,8 @@ const serverEn = {
   "startup.streamUnavailable": "[bot] Live stream unavailable: {{reason}}; Live Screen will fall back to JPEG polling",
   "startup.streamFfmpeg": "[bot] Live stream uses FFmpeg backend: viewing works; takeover input will fall back to agent-desktop",
   "takeover.resumedDescription": "Human takeover completed",
+  "takeover.linkDescription": "Human takeover link",
+  "takeover.linkText": "Human takeover needed: {{reason}}\nOpen one of these links in a browser (one-time, valid 5 minutes; run /bot-link for a new one):\n{{urls}}",
   "permission.highRisk": "Bot detected sensitive keyword \"{{keyword}}\". Please confirm whether to allow this action on your Mac.",
 
   "cmd.bot.description": "Inspect macOS host status, Accessibility/Screen Recording permissions, and remote Live Screen console URLs",
@@ -67,8 +69,8 @@ const serverEn = {
 
   "cmd.doctor.description": "Check host dependencies (agent CLIs & versions, native sidecar, TCC permissions, browser mode) with fix hints",
 
-  "cmd.screen.description": "Capture the current Mac screen and return Web / Mobile live remote console URLs",
-  "cmd.screen.prompt": "Please call computer_screenshot now to capture the main Mac screen, and show me these live remote console URLs:\n{{urls}}",
+  "cmd.screen.description": "Get a one-time link to open the live remote screen in a browser (Web / Mobile)",
+  "cmd.screen.prompt": "Web / Mobile console link (one-time, valid 5 minutes):\n{{urls}}",
 
   "cmd.takeover.description": "List or finish human takeover (usage: /takeover or /takeover done [note])",
   "cmd.takeover.empty": "No human takeovers are currently pending.\nLive Screen Console: {{urls}}",
@@ -136,6 +138,8 @@ const serverZh: Record<ServerMessageKey, string> = {
   "startup.streamUnavailable": "[bot] 实时直播不可用：{{reason}}；实时画面将降级为 JPEG 轮询",
   "startup.streamFfmpeg": "[bot] 直播使用 FFmpeg 后端：观看可用，接管期间键鼠注入将走 agent-desktop 降级路径",
   "takeover.resumedDescription": "已完成人工接管",
+  "takeover.linkDescription": "人工接管链接",
+  "takeover.linkText": "需要人工接管：{{reason}}\n请在浏览器中打开以下任一链接（一次性，5 分钟内有效；可再运行 /bot-link 获取新链接）：\n{{urls}}",
   "permission.highRisk": "Bot 检测到敏感操作关键词「{{keyword}}」，请确认是否允许在 Mac 上执行。",
 
   "cmd.bot.description": "查看 Mac 宿主机状态、无障碍/录屏权限及远程实时画面控制台链接",
@@ -158,8 +162,8 @@ const serverZh: Record<ServerMessageKey, string> = {
 
   "cmd.doctor.description": "体检宿主机依赖（agent CLI 及版本、原生 sidecar、TCC 权限、浏览器模式）并给出修复建议",
 
-  "cmd.screen.description": "截取当前 Mac 屏幕并获取 Web / 手机端实时远程操控链接",
-  "cmd.screen.prompt": "请立即调用 computer_screenshot 截取当前 Mac 主屏幕，并把以下远程实时操控台链接展示给我：\n{{urls}}",
+  "cmd.screen.description": "获取一次性链接，在浏览器 / 手机上打开实时远程屏幕",
+  "cmd.screen.prompt": "Web / 手机端控制台链接（一次性，5 分钟内有效）：\n{{urls}}",
 
   "cmd.takeover.description": "查看或结束人工接管（用法: /takeover 或 /takeover done [说明]）",
   "cmd.takeover.empty": "当前没有等待中的人工接管。\n实时画面控制台：{{urls}}",
@@ -225,6 +229,8 @@ const serverZht: Record<ServerMessageKey, string> = {
   "startup.streamUnavailable": "[bot] 即時直播無法使用：{{reason}}；即時畫面將降級為 JPEG 輪詢",
   "startup.streamFfmpeg": "[bot] 直播使用 FFmpeg 後端：觀看可用，接管期間鍵鼠注入將走 agent-desktop 降級路徑",
   "takeover.resumedDescription": "已完成人工接管",
+  "takeover.linkDescription": "人工接管連結",
+  "takeover.linkText": "需要人工接管：{{reason}}\n請在瀏覽器中開啟以下任一連結（一次性，5 分鐘內有效；可再執行 /bot-link 取得新連結）：\n{{urls}}",
   "permission.highRisk": "Bot 偵測到敏感操作關鍵字「{{keyword}}」，請確認是否允許在 Mac 上執行。",
 
   "cmd.bot.description": "檢視 Mac 宿主機狀態、輔助使用/螢幕錄製權限及遠端即時畫面控制台連結",
@@ -247,8 +253,8 @@ const serverZht: Record<ServerMessageKey, string> = {
 
   "cmd.doctor.description": "健檢宿主機依賴（agent CLI 及版本、原生 sidecar、TCC 權限、瀏覽器模式）並提供修復建議",
 
-  "cmd.screen.description": "擷取目前 Mac 螢幕並取得 Web / 手機端即時遠端控制連結",
-  "cmd.screen.prompt": "請立即呼叫 computer_screenshot 擷取目前 Mac 主螢幕，並把以下遠端即時控制台連結顯示給我：\n{{urls}}",
+  "cmd.screen.description": "取得一次性連結，在瀏覽器 / 手機上開啟即時遠端螢幕",
+  "cmd.screen.prompt": "Web / 手機端控制台連結（一次性，5 分鐘內有效）：\n{{urls}}",
 
   "cmd.takeover.description": "檢視或結束人工接管（用法: /takeover 或 /takeover done [說明]）",
   "cmd.takeover.empty": "目前沒有等待中的人工接管。\n即時畫面控制台：{{urls}}",

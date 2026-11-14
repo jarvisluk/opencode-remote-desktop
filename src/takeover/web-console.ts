@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { networkInterfaces } from "node:os"
 import { randomBytes, timingSafeEqual } from "node:crypto"
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname } from "node:path"
 import type { BotOptions } from "../options.ts"
 import {
   captureScreenJpeg,
@@ -15,6 +17,29 @@ import { normalizeLocale, parseAcceptLanguage, resolveLocale, toBcp47, type Supp
 import { WEB_CONSOLE_I18N } from "../i18n/web-console.ts"
 
 const COOKIE_NAME = "bot_auth"
+const TICKET_TTL_MS = 5 * 60_000
+const MAX_TICKETS = 32
+
+/** Reads the console token from `path`, creating it on first use so links survive restarts. An empty path stays in memory. */
+function loadToken(path: string): string {
+  if (path) {
+    try {
+      const saved = readFileSync(path, "utf8").trim()
+      if (saved.length >= 32) return saved
+    } catch {}
+  }
+  const token = randomBytes(24).toString("base64url")
+  if (path) {
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, token, { mode: 0o600 })
+      chmodSync(path, 0o600)
+    } catch (err) {
+      console.warn("[bot] Could not persist the web console token; links will change on restart:", err)
+    }
+  }
+  return token
+}
 
 function safeTokenEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8")
@@ -108,13 +133,15 @@ function discoverHostAddresses(bindHost: string): string[] {
 export class WebTakeoverConsole {
   private server: Server | null = null
   private boundPort: number | null = null
-  private readonly token = randomBytes(24).toString("base64url")
+  private readonly token: string
+  private readonly tickets = new Map<string, number>()
   private readonly options: BotOptions
   private readonly takeovers: TakeoverManager
   private readonly stream: StreamSidecar | null
 
   constructor(options: BotOptions, takeovers: TakeoverManager, stream: StreamSidecar | null = null) {
     this.options = options
+    this.token = loadToken(options.consoleTokenPath)
     this.takeovers = takeovers
     this.stream = stream
   }
@@ -155,12 +182,36 @@ export class WebTakeoverConsole {
     await new Promise<void>((resolve) => srv.close(() => resolve()))
   }
 
+  /** Links carrying the long-lived token. For trusted local use only; share `getShareUrls` instead. */
   getUrls(sessionID?: string): string[] {
-    if (!this.server || !this.boundPort) return []
-    const suffix = sessionID
-      ? `/?token=${encodeURIComponent(this.token)}&session=${encodeURIComponent(sessionID)}`
-      : `/?token=${encodeURIComponent(this.token)}`
+    return this.buildUrls(`token=${encodeURIComponent(this.token)}`, sessionID)
+  }
 
+  /** Links carrying a single-use ticket (valid 5 minutes) that is swapped for a cookie on first open, safe to put in chat. */
+  getShareUrls(sessionID?: string): string[] {
+    if (!this.server) return []
+    return this.buildUrls(`ticket=${encodeURIComponent(this.issueTicket())}`, sessionID)
+  }
+
+  private issueTicket(): string {
+    const now = Date.now()
+    for (const [t, exp] of this.tickets) if (exp <= now) this.tickets.delete(t)
+    while (this.tickets.size >= MAX_TICKETS) this.tickets.delete(this.tickets.keys().next().value as string)
+    const ticket = randomBytes(18).toString("base64url")
+    this.tickets.set(ticket, now + TICKET_TTL_MS)
+    return ticket
+  }
+
+  private consumeTicket(ticket: string): boolean {
+    const exp = this.tickets.get(ticket)
+    if (exp === undefined) return false
+    this.tickets.delete(ticket)
+    return exp > Date.now()
+  }
+
+  private buildUrls(credential: string, sessionID?: string): string[] {
+    if (!this.server || !this.boundPort) return []
+    const suffix = `/?${credential}${sessionID ? `&session=${encodeURIComponent(sessionID)}` : ""}`
     const urls: string[] = []
     if (this.options.publicBaseUrl) {
       urls.push(`${this.options.publicBaseUrl}${suffix}`)
@@ -174,6 +225,10 @@ export class WebTakeoverConsole {
   private isAuthenticated(req: IncomingMessage, url: URL): { readonly ok: boolean; readonly fromQuery: boolean } {
     const queryToken = url.searchParams.get("token")
     if (queryToken && safeTokenEquals(queryToken, this.token)) {
+      return { ok: true, fromQuery: true }
+    }
+    const ticket = url.searchParams.get("ticket")
+    if (ticket && this.consumeTicket(ticket)) {
       return { ok: true, fromQuery: true }
     }
     const headerToken = req.headers["x-bot-token"]

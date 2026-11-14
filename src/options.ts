@@ -1,3 +1,5 @@
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { parseLocalePreference, type LocalePreference } from "./i18n/locale.ts"
 
 export type KeepAwakeMode = "off" | "active" | "always"
@@ -14,6 +16,8 @@ export interface BotOptions {
   readonly consolePort: number
   /** Enable the standalone Web/Mobile Takeover Console HTTP server. Default: true. */
   readonly consoleEnabled: boolean
+  /** File that keeps the console token across restarts so saved links keep working. "" keeps it in memory only. Default: ~/Library/Application Support/opencode-bot/console-token. */
+  readonly consoleTokenPath: string
   /** Optional external tunnel base URL (e.g. Cloudflare Tunnel / Tailscale Funnel) pointing to consolePort. */
   readonly publicBaseUrl?: string
   /** Prevent macOS from sleeping via `caffeinate -di`. Default: "active" (awake during takeovers & routines). */
@@ -74,6 +78,9 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
     consoleHost: typeof opts.consoleHost === "string" && opts.consoleHost.trim() ? opts.consoleHost.trim() : "0.0.0.0",
     consolePort: port,
     consoleEnabled: opts.consoleEnabled !== false,
+    consoleTokenPath: typeof opts.consoleTokenPath === "string"
+      ? opts.consoleTokenPath.trim()
+      : join(homedir(), "Library", "Application Support", "opencode-bot", "console-token"),
     publicBaseUrl: typeof opts.publicBaseUrl === "string" && opts.publicBaseUrl.trim()
       ? opts.publicBaseUrl.trim().replace(/\/+$/, "")
       : undefined,

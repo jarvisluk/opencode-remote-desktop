@@ -166,7 +166,7 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
     isMac: true,
     awake: { isHeld: () => false } as any,
     takeovers: manager,
-    webConsole: { getUrls: () => ["http://127.0.0.1:49375/?token=secret-token&session=ses_1"] } as any,
+    webConsole: { getUrls: () => ["http://127.0.0.1:49375/?token=secret-token"], getShareUrls: () => ["http://127.0.0.1:49375/?ticket=t1"] } as any,
     browser: { inspect: async () => ({ mode: "cdp" }), run: async () => ({ ok: true }) } as any,
     routines: { list: () => [] } as any,
     permissionAssert: async () => {},
@@ -209,4 +209,34 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
   assert.equal(browserUnblocked.content.includes("Action blocked: human takeover"), false)
 
   manager.dispose()
+})
+
+test("console token persists, tickets are single-use", async () => {
+  const { mkdtempSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { WebTakeoverConsole } = await import("../src/takeover/web-console.ts")
+  const { ViewerRegistry } = await import("../src/takeover/viewers.ts")
+  const path = join(mkdtempSync(join(tmpdir(), "bot-token-")), "console-token")
+  const opts = resolveOptions({ consoleHost: "127.0.0.1", consolePort: 0, consoleTokenPath: path })
+  const a = new WebTakeoverConsole(opts, new TakeoverManager(() => () => {}))
+  const b = new WebTakeoverConsole(opts, new TakeoverManager(() => () => {}))
+  await a.start()
+  try {
+    assert.equal((a as any).token, (b as any).token)
+    const url = a.getShareUrls("ses_1")[0]!
+    assert.equal(url.includes("token="), false)
+    assert.equal((await fetch(url)).status, 200)
+    assert.equal((await fetch(url)).status, 401)
+  } finally {
+    await a.dispose()
+  }
+
+  const v = new ViewerRegistry()
+  assert.equal(v.isUnknown(), true)
+  v.beat({ clientId: "m", platform: "web", mobile: true })
+  assert.equal(v.hasPanelViewer(), false)
+  v.beat({ clientId: "d", platform: "desktop", mobile: false })
+  assert.equal(v.hasPanelViewer(), true)
+  assert.equal(v.hasPanelViewer(Date.now() + 60_000), false)
 })

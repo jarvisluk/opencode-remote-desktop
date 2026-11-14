@@ -37,7 +37,7 @@ export async function collectBotStatus(params: {
     desktop,
     keepAwakeActive: awake.isActive,
     browserMode: browser.modeDescription,
-    consoleUrls: webConsole.getUrls(sessionID),
+    consoleUrls: webConsole.getShareUrls(sessionID),
     activeTakeovers: takeovers.list(),
     routines: routineList,
     ...(windows ? { windows } : {}),
