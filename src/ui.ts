@@ -123,8 +123,10 @@ export function takeoverCard(
   return h("div", {
     style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
   }, [
-    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
-    h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
+    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis", "min-width": "0" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
+    h("div", { style: { flex: "none", "white-space": "nowrap", display: "flex" } }, [
+      h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
+    ]),
   ]) as unknown as JSX.Element
 }
 
