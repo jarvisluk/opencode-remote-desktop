@@ -516,6 +516,14 @@ export default Plugin.define({
         persistent: true,
         actions: [
           {
+            label: ctx.t("takeover.toastOpen"),
+            run() {
+              const target = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === item.sessionID)
+              ctx.tabs.open({ server: server.id, id: item.sessionID }, { focus: true })
+              if (target && remote(target)) ctx.layout.open(TAB_KEY, target, { tab: "open" })
+            },
+          },
+          {
             label: ctx.t("takeover.toastResume"),
             run() {
               void server.client
