@@ -189,6 +189,26 @@ npm run build     # 构建 dist/gui-experimental.cjs
 
 ---
 
+## 发布
+
+发版走 GitHub Actions 的 trusted publishing（OIDC + provenance），不需要在本机存 npm token：
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0   # 或手动触发 workflow_dispatch
+```
+
+workflow 会在 macOS runner 上跑 typecheck、测试、编译原生 sidecar，然后 `npm publish --provenance`。tag 与 `package.json` 的版本不一致会直接失败。
+
+首次需要在 npm 上授权这个 workflow 作为 trusted publisher：
+
+```bash
+npm trust github opencode-remote-desktop \
+  --repo jarvisluk/opencode-remote-desktop \
+  --file publish.yml --allow-publish
+```
+
+也可以在 npmjs.com 的包设置 → Trusted publishing 里添加（Publisher: GitHub Actions，Repository: `jarvisluk/opencode-remote-desktop`，Workflow: `publish.yml`）。之后每次发版只要推 tag。
+
 ## License
 
 MIT
