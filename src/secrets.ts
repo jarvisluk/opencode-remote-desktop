@@ -133,8 +133,9 @@ export class SecretManager {
     }
     const promise = new Promise<void>((resolve, reject) => {
       const release = this.acquireAwake()
+      // Not unref'd: the pending request is what keeps the timeout meaningful, and a test (or a short-lived
+      // process) that awaits it must not have the event loop drain first.
       const timer = setTimeout(() => this.cancel({ id: item.id }, "Timed out waiting for the user"), this.timeoutMs)
-      timer.unref?.()
       const onAbort = () => this.cancel({ id: item.id }, "Session stopped")
       input.signal?.addEventListener("abort", onAbort, { once: true })
       this.pending.set(item.id, {
