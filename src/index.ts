@@ -14,6 +14,7 @@ import {
 import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
 import { WebTakeoverConsole } from "./takeover/web-console.ts"
+import { SCREEN_BUSY_DETAIL, ScreenLock, isGuiToolCall } from "./takeover/screen-lock.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
@@ -99,7 +100,28 @@ export default Plugin.define({
     }
     const streamProbe = StreamSidecar.probe({ ...streamOptions, locale })
     const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
-    const webConsole = new WebTakeoverConsole(options, takeovers, stream)
+    const screen = new ScreenLock(takeovers)
+    const unsubScreen = screen.onChange((state) => {
+      void stream?.setInput(state.owner !== "agent").catch(() => {})
+    })
+    // Interrupts every session driving the screen and hands it to the person through a regular takeover,
+    // so the existing resume button tells the agent to re-check the screen.
+    const forceTakeover = async (sessionID?: string) => {
+      const state = screen.state()
+      if (state.owner === "human") return { interrupted: 0, ...(state.takeoverId ? { takeoverId: state.takeoverId } : {}) }
+      const targets = state.owner === "agent" ? state.sessionIDs : []
+      const results = await Promise.allSettled(
+        targets.map((id) => ctx.session.interrupt({ sessionID: id as any, resume: false })),
+      )
+      screen.release()
+      const owner = targets[0] ?? sessionID
+      const item = owner ? takeovers.request({ sessionID: owner, reason: tServer(locale, "takeover.forcedReason") }) : undefined
+      return {
+        interrupted: results.filter((r) => r.status === "fulfilled").length,
+        ...(item ? { takeoverId: item.id } : {}),
+      }
+    }
+    const webConsole = new WebTakeoverConsole(options, takeovers, stream, screen, forceTakeover)
     if (!stream) {
       console.warn(
         tServer(locale, "startup.streamUnavailable", {
@@ -190,6 +212,7 @@ export default Plugin.define({
           key?: string
           app?: string
         }
+        if (!screen.inputAllowed()) return { ok: false, detail: SCREEN_BUSY_DETAIL }
         return injectRemoteInput(input, callCtx.signal)
       },
       listWindows: async (rawInput, callCtx) => {
@@ -230,6 +253,8 @@ export default Plugin.define({
         const resolved = takeovers.resolveBySession(input.sessionID, input.note, { source: "ui" })
         return { resolved: resolved.length }
       },
+      screenState: async () => screen.state(),
+      forceTakeover: async (rawInput) => forceTakeover((rawInput as { sessionID?: string } | undefined)?.sessionID),
       streamOffer: async (rawInput) => {
         const { sdp } = rawInput as { sdp: string }
         if (!stream) throw new Error("Live stream helpers are not built for this platform (run npm run build:native)")
@@ -294,6 +319,25 @@ export default Plugin.define({
         chatResumedTakeovers.set(event.sessionID, { id: pending.id, reason: pending.reason })
         takeovers.resolveBySession(event.sessionID, event.prompt.text, { source: "chat" })
       }
+    })
+
+    // 3b. Screen ownership: GUI tool calls mark the session as driving the screen; while a person holds it,
+    //     any GUI tool call fails instead of fighting them for the mouse.
+    const toolBeforeReg = await ctx.tool.hook("execute.before", (event) => {
+      if (!isGuiToolCall(event.tool, event.input)) return
+      const state = screen.state()
+      if (state.owner === "human") {
+        throw new Error(
+          `Action blocked: human takeover (${state.takeoverId}: "${state.reason}") is in progress on the host screen. Stop calling tools and end your turn now; the session resumes when the user is done.`,
+        )
+      }
+      screen.begin(event.sessionID, event.id, event.tool)
+    })
+    const toolAfterReg = await ctx.tool.hook("execute.after", (event) => {
+      screen.end(event.sessionID, event.id)
+    })
+    const idleHookReg = await ctx.session.hook("experimental.idle", (event) => {
+      screen.release(event.sessionID)
     })
 
     // 4. Context hook: inform the model about host Mac capabilities & Live Screen takeover workflow (WITHOUT secret tokens)
@@ -364,6 +408,8 @@ export default Plugin.define({
     return async () => {
       unsubReq()
       unsubRes()
+      unsubScreen()
+      screen.dispose()
       routines.dispose()
       stream?.dispose()
       disposeDesktopHelpers()
@@ -376,6 +422,9 @@ export default Plugin.define({
         skillReg.dispose(),
         contextHookReg.dispose(),
         promptHookReg.dispose(),
+        toolBeforeReg.dispose(),
+        toolAfterReg.dispose(),
+        idleHookReg.dispose(),
         permHookReg.dispose(),
         rpcReg.dispose(),
       ])

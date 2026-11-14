@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -46,7 +47,11 @@ type request struct {
 	T       string `json:"t"`
 	SDP     string `json:"sdp,omitempty"`
 	Session string `json:"session,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
 }
+
+// inputEnabled is cleared by the plugin while an agent owns the screen, so viewers cannot fight it.
+var inputEnabled atomic.Bool
 
 var (
 	outMu sync.Mutex
@@ -66,6 +71,7 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	log.SetPrefix("[bot-stream] ")
+	inputEnabled.Store(true)
 	if *capturePath == "" && *rawCmd == "" {
 		log.Fatal("--capture or --raw-cmd is required")
 	}
@@ -107,6 +113,9 @@ func main() {
 			}(req)
 		case "close":
 			hub.remove(req.Session)
+			reply(map[string]any{"id": req.ID, "t": "ok"})
+		case "input":
+			inputEnabled.Store(req.Enabled)
 			reply(map[string]any{"id": req.ID, "t": "ok"})
 		}
 	}
@@ -222,7 +231,7 @@ func (h *hub) accept(api *webrtc.API, servers []webrtc.ICEServer, offerSDP strin
 			var probe struct {
 				T string `json:"t"`
 			}
-			if msg.IsString && len(msg.Data) < 8192 && json.Unmarshal(msg.Data, &probe) == nil && inputTypes[probe.T] {
+			if inputEnabled.Load() && msg.IsString && len(msg.Data) < 8192 && json.Unmarshal(msg.Data, &probe) == nil && inputTypes[probe.T] {
 				h.sendBytes(msg.Data)
 			}
 		})

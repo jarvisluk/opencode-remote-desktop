@@ -128,6 +128,19 @@ export function takeoverCard(
   ]) as unknown as JSX.Element
 }
 
+/** Top-right card shown while an agent drives the screen and remote input is locked. */
+export function agentCard(ui: Ui, text: () => string, force: () => void, forceLabel: TextOrGetter): JSX.Element {
+  return h("div", {
+    role: "status",
+    style: floating("top-right", { display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
+  }, [
+    h("span", { style: { width: "6px", height: "6px", "border-radius": "50%", flex: "none", background: T.focus, animation: "bot-agent-pulse 1.2s ease-in-out infinite" } }),
+    h("style", {}, "@keyframes bot-agent-pulse { 50% { opacity: 0.3 } }"),
+    h("span", { title: text, style: { "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, text),
+    h(ui.Button, { variant: "danger", size: "small", onClick: (_e: MouseEvent) => force(), children: forceLabel as any }),
+  ]) as unknown as JSX.Element
+}
+
 // Height of OpenCode's own title strip (8px top inset + 48px traffic-light row, measured in the 2.3.0 shell).
 const WINDOW_CONTROLS = "56px"
 

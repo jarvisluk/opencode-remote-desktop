@@ -8,7 +8,7 @@ import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -75,6 +75,8 @@ export function LiveScreenView(props: {
   const [takeover, setTakeover] = createSignal<{ active: boolean; reason: string }>({ active: false, reason: "" })
   const [showLink, setShowLink] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
+  const [screen, setScreen] = createSignal<{ owner: string; tool?: string; sessionIDs: string[] }>({ owner: "idle", sessionIDs: [] })
+  const agentBusy = () => screen().owner === "agent"
 
   let imageRef: HTMLImageElement | null = null
   let rootRef: HTMLDivElement | undefined
@@ -139,6 +141,20 @@ export function LiveScreenView(props: {
     } catch {}
   }
 
+  const checkScreen = async () => {
+    try {
+      const state = await getClientRpc()?.screenState({})
+      if (state) setScreen(state)
+    } catch {}
+  }
+
+  const forceTakeover = async () => {
+    try {
+      await getClientRpc()?.forceTakeover({ sessionID: screen().sessionIDs[0] ?? curSession()?.id })
+    } catch {}
+    await Promise.all([checkScreen(), props.takeoverReason ? undefined : checkTakeovers()])
+  }
+
   const resumeAI = async () => {
     try {
       await getClientRpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
@@ -162,7 +178,7 @@ export function LiveScreenView(props: {
 
   const sendRemoteInput = async (input: { kind: RemoteInputKind; x?: number; y?: number; deltaY?: number; text?: string; key?: string }) => {
     const rpc = getClientRpc()
-    if (!rpc) return
+    if (!rpc || agentBusy()) return
     try {
       const selectedWin = windows().find((w) => w.id === selectedWindowId())
       await rpc.sendInput({ ...input, app: selectedWin?.appName || undefined })
@@ -239,6 +255,9 @@ export function LiveScreenView(props: {
   onMount(() => {
     void refreshWindows()
     void fetchNextFrame()
+    void checkScreen()
+    const screenTimer = setInterval(checkScreen, 1500)
+    onCleanup(() => clearInterval(screenTimer))
     if (!props.takeoverReason) {
       void checkTakeovers()
       const takeoverTimer = setInterval(checkTakeovers, 3000)
@@ -305,7 +324,7 @@ export function LiveScreenView(props: {
       onWheel: handleWheel,
       style: () => ({
         position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center",
-        cursor: "crosshair", "user-select": "none", outline: focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px",
+        cursor: agentBusy() ? "not-allowed" : "crosshair", "user-select": "none", outline: agentBusy() || focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px",
       }),
     }, () => frame()?.jpegBase64
       ? h("img", {
@@ -395,7 +414,12 @@ export function LiveScreenView(props: {
     () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
       text: () => t("takeover.cardPrefix", { reason: activeTakeoverReason() }),
       resume: () => t("takeover.cardResume"),
-    }) : null,
+    }) : agentBusy() ? agentCard(
+      ui,
+      () => (screen().tool ? t("screen.agentOperatingTool", { tool: screen().tool! }) : t("screen.agentOperating")),
+      () => void forceTakeover(),
+      () => t("screen.forceTakeover"),
+    ) : null,
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
         label: (() => t("jpeg.textLabel")) as any,

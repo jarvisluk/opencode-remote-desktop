@@ -11,6 +11,7 @@ import {
 } from "../macos/desktop.ts"
 import type { StreamSidecar } from "../stream/sidecar.ts"
 import type { TakeoverManager } from "./manager.ts"
+import { SCREEN_BUSY_DETAIL, type ScreenLock } from "./screen-lock.ts"
 import { normalizeLocale, parseAcceptLanguage, resolveLocale, toBcp47, type SupportedLocale } from "../i18n/locale.ts"
 import { WEB_CONSOLE_I18N } from "../i18n/web-console.ts"
 
@@ -112,11 +113,21 @@ export class WebTakeoverConsole {
   private readonly options: BotOptions
   private readonly takeovers: TakeoverManager
   private readonly stream: StreamSidecar | null
+  private readonly screen: ScreenLock | null
+  private readonly forceTakeover: ((sessionID?: string) => Promise<{ interrupted: number; takeoverId?: string }>) | null
 
-  constructor(options: BotOptions, takeovers: TakeoverManager, stream: StreamSidecar | null = null) {
+  constructor(
+    options: BotOptions,
+    takeovers: TakeoverManager,
+    stream: StreamSidecar | null = null,
+    screen: ScreenLock | null = null,
+    forceTakeover: ((sessionID?: string) => Promise<{ interrupted: number; takeoverId?: string }>) | null = null,
+  ) {
     this.options = options
     this.takeovers = takeovers
     this.stream = stream
+    this.screen = screen
+    this.forceTakeover = forceTakeover
   }
 
   async start(): Promise<void> {
@@ -226,6 +237,7 @@ export class WebTakeoverConsole {
         const payload = {
           streamAvailable: Boolean(this.stream),
           takeovers: this.takeovers.list(),
+          screen: this.screen?.state() ?? { owner: "idle", sessionIDs: [] },
           windows: windows.map((w) => ({
             id: w.id,
             appName: w.appName,
@@ -303,6 +315,11 @@ export class WebTakeoverConsole {
           res.end(JSON.stringify({ ok: false, detail: "Invalid input kind" }))
           return
         }
+        if (this.screen && !this.screen.inputAllowed()) {
+          res.writeHead(409, { "Content-Type": "application/json; charset=utf-8" })
+          res.end(JSON.stringify({ ok: false, detail: SCREEN_BUSY_DETAIL }))
+          return
+        }
         const out = await injectRemoteInput({
           kind,
           x: typeof body.x === "number" ? body.x : undefined,
@@ -314,6 +331,15 @@ export class WebTakeoverConsole {
         })
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
         res.end(JSON.stringify(out))
+        return
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/force-takeover") {
+        const body = await readJsonBody(req)
+        const sessionID = typeof body.sessionID === "string" && body.sessionID ? body.sessionID : undefined
+        const out = this.forceTakeover ? await this.forceTakeover(sessionID) : { interrupted: 0 }
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
+        res.end(JSON.stringify({ ok: true, ...out }))
         return
       }
 
@@ -607,7 +633,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
     .key:active { background: var(--surface-active); }
 
     /* 接管提示：AI 等待时始终显示 */
-    #takeoverBanner {
+    #takeoverBanner, #agentBanner {
       position: fixed;
       left: 50%;
       top: calc(58px + var(--safe-top));
@@ -622,10 +648,16 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       border-color: rgba(245, 200, 75, 0.45);
       transform: translateX(-50%);
     }
-    #takeoverBanner[data-open="true"] { display: flex; }
-    body[data-top="open"] #takeoverBanner { top: calc(62px + var(--safe-top)); }
-    #takeoverBanner p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #takeoverBanner[data-open="true"], #agentBanner[data-open="true"] { display: flex; }
+    body[data-top="open"] #takeoverBanner, body[data-top="open"] #agentBanner { top: calc(62px + var(--safe-top)); }
+    #takeoverBanner p, #agentBanner p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #takeoverBanner .warn { color: var(--warning); flex-shrink: 0; }
+    #agentBanner { border-color: rgba(96, 165, 250, 0.5); }
+    #agentBanner .warn { color: var(--interactive); animation: agentPulse 1.2s ease-in-out infinite; }
+    @keyframes agentPulse { 50% { opacity: 0.3; } }
+    /* AI 操作中：画面只读 */
+    body[data-screen="agent"] #screenWrap { outline: 2px solid var(--interactive); outline-offset: -2px; cursor: not-allowed; }
+    body[data-screen="agent"] #dock { opacity: 0.5; pointer-events: none; }
     .btn-primary {
       height: 30px;
       padding: 0 12px;
@@ -700,6 +732,12 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l5-5 5 5"/></svg>
     </button>
   </header>
+
+  <div id="agentBanner" class="glass" role="status">
+    <span class="warn">●</span>
+    <p id="agentText" data-i18n="agentOperating">${s.agentOperating}</p>
+    <button class="btn-primary" id="forceBtn" type="button" data-i18n="forceTakeoverBtn">${s.forceTakeoverBtn}</button>
+  </div>
 
   <div id="takeoverBanner" class="glass" role="alert">
     <span class="warn">●</span>
@@ -786,6 +824,9 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       const fpsSelect = $("fpsSelect");
       const banner = $("takeoverBanner");
       const reasonEl = $("takeoverReason");
+      const agentBanner = $("agentBanner");
+      const agentText = $("agentText");
+      let screenOwner = "idle";
       const textInput = $("textInput");
       const sendBtn = $("sendBtn");
       const topToggle = $("topToggle");
@@ -841,6 +882,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       }
 
       function sendDc(msg, ephemeral) {
+        if (screenOwner === "agent") return true;
         if (!dc || dc.readyState !== "open") return false;
         if (ephemeral && dc.bufferedAmount > 65536) return true;
         dc.send(JSON.stringify(msg));
@@ -1118,6 +1160,13 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
           } else {
             banner.dataset.open = "false";
           }
+
+          const screen = data.screen || { owner: "idle", sessionIDs: [] };
+          screenOwner = screen.owner;
+          document.body.dataset.screen = screen.owner;
+          agentBanner.dataset.open = String(screen.owner === "agent");
+          agentBanner.dataset.session = (screen.sessionIDs || [])[0] || "";
+          agentText.textContent = screen.tool ? t("agentOperatingTool", { tool: screen.tool }) : t("agentOperating");
         } catch {}
       }
 
@@ -1152,6 +1201,10 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       }
 
       async function sendInput(payload) {
+        if (screenOwner === "agent") {
+          setStatus(t("inputLockedAgent"), "error");
+          return;
+        }
         if (payload.kind === "type" && payload.text && sendDc({ t: "text", s: payload.text })) {
           return;
         }
@@ -1388,6 +1441,17 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       });
       fpsSelect.addEventListener("change", scheduleLoop);
 
+      $("forceBtn").addEventListener("click", async () => {
+        if (!confirm(t("forceTakeoverConfirm"))) return;
+        await fetch("/api/force-takeover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionID: agentBanner.dataset.session || targetSession || undefined }),
+        });
+        await fetchState();
+        setStatus(t("forceTakeoverDone"), "online");
+      });
+
       $("resumeBtn").addEventListener("click", async () => {
         const sid = banner.dataset.session || targetSession || undefined;
         await fetch("/api/resolve", {
@@ -1408,7 +1472,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
           scheduleLoop();
         }
       });
-      setInterval(fetchState, 3000);
+      setInterval(fetchState, 1500);
     })();
   </script>
 </body>

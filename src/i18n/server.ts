@@ -45,6 +45,7 @@ const serverEn = {
   "startup.streamUnavailable": "[bot] Live stream unavailable: {{reason}}; Live Screen will fall back to JPEG polling",
   "startup.streamFfmpeg": "[bot] Live stream uses FFmpeg backend: viewing works; takeover input will fall back to agent-desktop",
   "takeover.resumedDescription": "Human takeover completed",
+  "takeover.forcedReason": "The user took over the screen and interrupted the agent",
   "permission.highRisk": "Bot detected sensitive keyword \"{{keyword}}\". Please confirm whether to allow this action on your Mac.",
 
   "cmd.bot.description": "Inspect macOS host status, Accessibility/Screen Recording permissions, and remote Live Screen console URLs",
@@ -136,6 +137,7 @@ const serverZh: Record<ServerMessageKey, string> = {
   "startup.streamUnavailable": "[bot] 实时直播不可用：{{reason}}；实时画面将降级为 JPEG 轮询",
   "startup.streamFfmpeg": "[bot] 直播使用 FFmpeg 后端：观看可用，接管期间键鼠注入将走 agent-desktop 降级路径",
   "takeover.resumedDescription": "已完成人工接管",
+  "takeover.forcedReason": "用户已接管屏幕并中断了 agent",
   "permission.highRisk": "Bot 检测到敏感操作关键词「{{keyword}}」，请确认是否允许在 Mac 上执行。",
 
   "cmd.bot.description": "查看 Mac 宿主机状态、无障碍/录屏权限及远程实时画面控制台链接",
@@ -225,6 +227,7 @@ const serverZht: Record<ServerMessageKey, string> = {
   "startup.streamUnavailable": "[bot] 即時直播無法使用：{{reason}}；即時畫面將降級為 JPEG 輪詢",
   "startup.streamFfmpeg": "[bot] 直播使用 FFmpeg 後端：觀看可用，接管期間鍵鼠注入將走 agent-desktop 降級路徑",
   "takeover.resumedDescription": "已完成人工接管",
+  "takeover.forcedReason": "使用者已接管螢幕並中斷了 agent",
   "permission.highRisk": "Bot 偵測到敏感操作關鍵字「{{keyword}}」，請確認是否允許在 Mac 上執行。",
 
   "cmd.bot.description": "檢視 Mac 宿主機狀態、輔助使用/螢幕錄製權限及遠端即時畫面控制台連結",
