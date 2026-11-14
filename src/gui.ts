@@ -1,14 +1,14 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
 import type { MountedSession, PanelProps, PanelTab, ServerRef, ToastHandle, Ui } from "@opencode/plugin/gui"
-import { createSignal, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { createSignal, createMemo, onMount, onCleanup, createEffect, untrack } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -78,6 +78,8 @@ export function LiveScreenView(props: {
   const [takeover, setTakeover] = createSignal<{ active: boolean; reason: string }>({ active: false, reason: "" })
   const [showLink, setShowLink] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
+  const [screen, setScreen] = createSignal<{ owner: string; tool?: string; sessionIDs: string[] }>({ owner: "idle", sessionIDs: [] })
+  const agentBusy = () => screen().owner === "agent"
 
   let imageRef: HTMLImageElement | null = null
   let rootRef: HTMLDivElement | undefined
@@ -142,6 +144,20 @@ export function LiveScreenView(props: {
     } catch {}
   }
 
+  const checkScreen = async () => {
+    try {
+      const state = await getClientRpc()?.screenState({})
+      if (state) setScreen(state)
+    } catch {}
+  }
+
+  const forceTakeover = async () => {
+    try {
+      await getClientRpc()?.forceTakeover({ sessionID: screen().sessionIDs[0] ?? curSession()?.id })
+    } catch {}
+    await Promise.all([checkScreen(), props.takeoverReason ? undefined : checkTakeovers()])
+  }
+
   const resumeAI = async () => {
     try {
       await getClientRpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
@@ -165,7 +181,7 @@ export function LiveScreenView(props: {
 
   const sendRemoteInput = async (input: { kind: RemoteInputKind; x?: number; y?: number; deltaY?: number; text?: string; key?: string }) => {
     const rpc = getClientRpc()
-    if (!rpc) return
+    if (!rpc || agentBusy()) return
     try {
       const selectedWin = windows().find((w) => w.id === selectedWindowId())
       await rpc.sendInput({ ...input, app: selectedWin?.appName || undefined })
@@ -242,6 +258,9 @@ export function LiveScreenView(props: {
   onMount(() => {
     void refreshWindows()
     void fetchNextFrame()
+    void checkScreen()
+    const screenTimer = setInterval(checkScreen, 1500)
+    onCleanup(() => clearInterval(screenTimer))
     if (!props.takeoverReason) {
       void checkTakeovers()
       const takeoverTimer = setInterval(checkTakeovers, 3000)
@@ -309,7 +328,7 @@ export function LiveScreenView(props: {
       onWheel: handleWheel,
       style: () => ({
         position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center",
-        cursor: "crosshair", "user-select": "none", outline: focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px",
+        cursor: agentBusy() ? "not-allowed" : "crosshair", "user-select": "none", outline: agentBusy() || focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px",
       }),
     }, () => frame()?.jpegBase64
       ? h("img", {
@@ -399,7 +418,12 @@ export function LiveScreenView(props: {
     () => (secret.pending() ? secret.card() : activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
       text: () => t("takeover.cardPrefix", { reason: activeTakeoverReason() }),
       resume: () => t("takeover.cardResume"),
-    }) : null),
+    }) : agentBusy() ? agentCard(
+      ui,
+      () => (screen().tool ? t("screen.agentOperatingTool", { tool: screen().tool! }) : t("screen.agentOperating")),
+      () => void forceTakeover(),
+      () => t("screen.forceTakeover"),
+    ) : null),
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
         label: (() => t("jpeg.textLabel")) as any,
@@ -435,13 +459,16 @@ export default Plugin.define({
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
     // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
-    const remote = (session?: { server: ServerRef }) => session?.server.local === false
+    // On the web the "local" server is the one serving the page, which is the host itself, seen from another device.
+    const remote = (session?: { server: ServerRef }) =>
+      !!session && session.server.local === false
 
     // Reactive map of active takeovers across connected servers, keyed by `${serverId}\n${sessionID}` (SessionRef.key).
     const [takeoversBySession, setTakeoversBySession] = createSignal<Record<string, { id: string; reason: string }>>({})
     const activeToasts = new Map<string, ToastHandle>()
     const autoOpenedTakeovers = new Set<string>()
     const watchedServers = new Map<string, () => void>()
+    const beaters = new Set<() => void>()
 
     const makeSessionKey = (serverId: string, sessionID: string) => `${serverId}\n${sessionID}`
 
@@ -489,15 +516,11 @@ export default Plugin.define({
         persistent: true,
         actions: [
           {
-            label: ctx.t("takeover.toastResume"),
+            label: ctx.t("takeover.toastOpen"),
             run() {
-              void server.client
-                .rpc(BotRpc)
-                .resolveTakeover({ sessionID: item.sessionID, note: "User completed takeover via Desktop notification" })
-                .then(() => {
-                  clearTakeoverEntry(server.id, item.sessionID)
-                })
-                .catch(() => {})
+              const target = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === item.sessionID)
+              ctx.tabs.open({ server: server.id, id: item.sessionID }, { focus: true })
+              if (target && remote(target)) ctx.layout.open(TAB_KEY, target, { tab: "open" })
             },
           },
         ],
@@ -539,13 +562,23 @@ export default Plugin.define({
       }
       void syncInitial()
 
-      // Tell the host this controller has the Live Screen panel, so it skips posting a link into the chat.
-      const beat = () =>
+      // Tell the host which of its sessions this controller shows and whether Live Screen can open there, so it knows when to post a link.
+      const beat = () => {
+        const cur = ctx.sessions.current()
+        const mine = cur?.server.id === server.id ? cur : undefined
         void rpc
-          .viewerHeartbeat({ clientId: CLIENT_ID, platform: ctx.app.platform, mobile: isNarrow() })
+          .viewerHeartbeat({
+            clientId: CLIENT_ID,
+            platform: ctx.app.platform,
+            mobile: isNarrow(),
+            ...(mine ? { sessionID: mine.id } : {}),
+            panel: remote(mine),
+          })
           .catch(() => {})
+      }
       beat()
       const beatTimer = setInterval(beat, 15_000)
+      beaters.add(beat)
 
       const unsubReq = rpc.events.on("takeoverRequested", (ev) => {
         if (disposed) return
@@ -578,6 +611,7 @@ export default Plugin.define({
       watchedServers.set(server.id, () => {
         disposed = true
         clearInterval(beatTimer)
+        beaters.delete(beat)
         unsubReq()
         unsubRes()
         unsubSecret()
@@ -616,6 +650,14 @@ export default Plugin.define({
       for (const existingId of [...watchedServers.keys()]) {
         if (!activeIds.has(existingId)) detachServer(existingId)
       }
+    })
+
+    // Switching sessions changes what this controller is watching; report it right away instead of on the next tick.
+    createEffect(() => {
+      ctx.sessions.current()
+      untrack(() => {
+        for (const b of beaters) b()
+      })
     })
 
     // If a session with a pending takeover is opened or focused after the event arrived, open Live Screen once for it.

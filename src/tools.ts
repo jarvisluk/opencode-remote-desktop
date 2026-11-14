@@ -315,19 +315,18 @@ export function registerBotTools(
         app: input.app,
       })
 
-      // No heartbeat at all means the controller has no bot GUI plugin: hand the agent the console link for its own side browser.
-      const sideUrl = viewers?.isUnknown() ? consoleLink(options, item.sessionID) : undefined
+      const url = viewers?.needsLink(item.sessionID) !== false ? consoleLink(options, item.sessionID) : undefined
 
       return {
         content: [
           `Human takeover requested (${item.id}): "${input.reason}".`,
-          `- Built-in Live Screen panel and takeover banner have been triggered automatically for this session.`,
-          `- If the user's client has no Live Screen panel (mobile, web without the plugin), a console link was already posted into the chat; do not repeat it.`,
-          ...(sideUrl
-            ? [`- The user's client appears to have no Live Screen panel. If you have a side/in-app browser tool (e.g. browser.tabs.open), open this URL once so the user can take over (the page asks for the server password); never print it in your reply: ${sideUrl}`]
-            : []),
-          `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click the resume button (or reply in chat) when done.`,
-          `- Do NOT paste standalone Web Console URLs unless the user is on mobile/external browser without Live Screen or asks for a link (they can run /bot-link anytime).`,
+          ...(viewers ? [`- Controllers: ${viewers.describe(item.sessionID)}`] : []),
+          viewers?.hasPanelViewer(item.sessionID)
+            ? `- The Live Screen panel and its takeover card (with the resume button) are open in the user's desktop app. Do not paste a console link.`
+            : url
+              ? `- The user has no Live Screen panel. Put this console link in your reply verbatim (it holds no credentials; the page asks for the OpenCode server password): ${url}`
+              : `- No Live Screen panel and no console URL is configured; ask the user to run /bot-link.`,
+          `- Stop calling tools and end your response NOW with a concise message telling the user what to do on the screen, and to click the resume button (or reply in chat) when done.`,
         ].join("\n"),
       }
     },

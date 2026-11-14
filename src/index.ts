@@ -13,9 +13,11 @@ import {
 } from "./macos/desktop.ts"
 import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
+import { SCREEN_BUSY_DETAIL, ScreenLock, isGuiToolCall } from "./takeover/screen-lock.ts"
 import { SecretManager } from "./secrets.ts"
 import { consoleLink } from "./console/link.ts"
-import { ViewerRegistry } from "./takeover/viewers.ts"
+import { ViewerRegistry, type ViewerBeat } from "./takeover/viewers.ts"
+import { acquireShared } from "./shared.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
@@ -98,22 +100,58 @@ export default Plugin.define({
     const isMac = process.platform === "darwin"
     const locale = resolveLocale(options.locale)
 
-    const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
-    const takeovers = new TakeoverManager(() => awake.acquire())
-    const secrets = new SecretManager(() => awake.acquire())
-    const browser = new MacBrowserController(options.reuseHostBrowser)
+    const shared = acquireShared(() => {
+      const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
+      const takeovers = new TakeoverManager(() => awake.acquire())
+      const secrets = new SecretManager(() => awake.acquire())
+      const browser = new MacBrowserController(options.reuseHostBrowser)
+      const streamOptions = {
+        iceServers: options.iceServers,
+        fps: options.streamFps,
+        bitrate: options.streamBitrate,
+        maxDimension: options.streamMaxDimension,
+        backend: options.streamBackend,
+        ffmpegInputArgs: options.ffmpegInputArgs,
+      }
+      const streamProbe = StreamSidecar.probe({ ...streamOptions, locale })
+      const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
+      const screen = new ScreenLock(takeovers)
+      const unsubScreen = screen.onChange((state) => {
+        void stream?.setInput(state.owner !== "agent").catch(() => {})
+      })
+      const viewers = new ViewerRegistry()
+      return {
+        value: { awake, takeovers, secrets, browser, streamProbe, stream, screen, viewers },
+        dispose: () => {
+          unsubScreen()
+          screen.dispose()
+          secrets.dispose()
+          stream?.dispose()
+          disposeDesktopHelpers()
+          takeovers.dispose()
+          awake.dispose()
+        },
+      }
+    })
+    const { awake, takeovers, secrets, browser, streamProbe, stream, screen, viewers } = shared.value
     const routines = new RoutineScheduler(ctx, () => awake.acquire(), options.routinePollMs)
-    const streamOptions = {
-      iceServers: options.iceServers,
-      fps: options.streamFps,
-      bitrate: options.streamBitrate,
-      maxDimension: options.streamMaxDimension,
-      backend: options.streamBackend,
-      ffmpegInputArgs: options.ffmpegInputArgs,
+    // Interrupts every session driving the screen and hands it to the person through a regular takeover,
+    // so the existing resume button tells the agent to re-check the screen.
+    const forceTakeover = async (sessionID?: string) => {
+      const state = screen.state()
+      if (state.owner === "human") return { interrupted: 0, ...(state.takeoverId ? { takeoverId: state.takeoverId } : {}) }
+      const targets = state.owner === "agent" ? state.sessionIDs : []
+      const results = await Promise.allSettled(
+        targets.map((id) => ctx.session.interrupt({ sessionID: id as any, resume: false })),
+      )
+      screen.release()
+      const owner = targets[0] ?? sessionID
+      const item = owner ? takeovers.request({ sessionID: owner, reason: tServer(locale, "takeover.forcedReason") }) : undefined
+      return {
+        interrupted: results.filter((r) => r.status === "fulfilled").length,
+        ...(item ? { takeoverId: item.id } : {}),
+      }
     }
-    const streamProbe = StreamSidecar.probe({ ...streamOptions, locale })
-    const stream = streamProbe.backend ? new StreamSidecar(streamOptions) : null
-    const viewers = new ViewerRegistry()
     if (!stream) {
       console.warn(
         tServer(locale, "startup.streamUnavailable", {
@@ -199,6 +237,7 @@ export default Plugin.define({
           key?: string
           app?: string
         }
+        if (!screen.inputAllowed()) return { ok: false, detail: SCREEN_BUSY_DETAIL }
         return injectRemoteInput(input, callCtx.signal)
       },
       listWindows: async (rawInput, callCtx) => {
@@ -235,7 +274,7 @@ export default Plugin.define({
         }
       },
       viewerHeartbeat: async (rawInput) => {
-        viewers.beat(rawInput as { clientId: string; platform: "web" | "desktop"; mobile: boolean })
+        viewers.beat(rawInput as ViewerBeat)
         return { ok: true }
       },
       resolveTakeover: async (rawInput) => {
@@ -243,6 +282,8 @@ export default Plugin.define({
         const resolved = takeovers.resolveBySession(input.sessionID, input.note, { source: "ui" })
         return { resolved: resolved.length }
       },
+      screenState: async () => screen.state(),
+      forceTakeover: async (rawInput) => forceTakeover((rawInput as { sessionID?: string } | undefined)?.sessionID),
       listSecretRequests: async () => {
         return { items: secrets.list() }
       },
@@ -275,17 +316,6 @@ export default Plugin.define({
         reason: item.reason,
         ...(url ? { consoleUrl: url } : {}),
       })
-      // Controllers without the Live Screen panel (mobile, no plugin) get the console link in the chat itself.
-      if (url && !viewers.hasPanelViewer()) {
-        void ctx.session
-          .synthetic({
-            sessionID: item.sessionID as any,
-            description: tServer(locale, "takeover.linkDescription"),
-            text: tServer(locale, "takeover.linkText", { reason: item.reason, url }),
-            resume: false,
-          })
-          .catch(() => {})
-      }
     })
     const unsubRes = takeovers.onResolved((item, note, source) => {
       void rpcReg.events.emit("takeoverResolved", {
@@ -293,7 +323,7 @@ export default Plugin.define({
         sessionID: item.sessionID,
         ...(note ? { note } : {}),
       })
-      if (source === "ui" || source === "command") {
+      if ((source === "ui" || source === "command") && shared.once(`resume:${item.id}`)) {
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
@@ -316,7 +346,7 @@ export default Plugin.define({
         reason: item.reason,
       })
       const url = consoleLink(options, item.sessionID)
-      if (url && !viewers.hasPanelViewer()) {
+      if (url && viewers.needsLink(item.sessionID) && shared.once(`secret-link:${item.id}`)) {
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
@@ -363,13 +393,32 @@ export default Plugin.define({
       }
     })
 
+    // 3b. Screen ownership: GUI tool calls mark the session as driving the screen; while a person holds it,
+    //     any GUI tool call fails instead of fighting them for the mouse.
+    const toolBeforeReg = await ctx.tool.hook("execute.before", (event) => {
+      if (!isGuiToolCall(event.tool, event.input)) return
+      const state = screen.state()
+      if (state.owner === "human") {
+        throw new Error(
+          `Action blocked: human takeover (${state.takeoverId}: "${state.reason}") is in progress on the host screen. Stop calling tools and end your turn now; the session resumes when the user is done.`,
+        )
+      }
+      screen.begin(event.sessionID, event.id, event.tool)
+    })
+    const toolAfterReg = await ctx.tool.hook("execute.after", (event) => {
+      screen.end(event.sessionID, event.id)
+    })
+    const idleHookReg = await ctx.session.hook("experimental.idle", (event) => {
+      screen.release(event.sessionID)
+    })
+
     // 4. Context hook: inform the model about host Mac capabilities & Live Screen takeover workflow (WITHOUT secret tokens)
     const contextHookReg = await ctx.session.hook("context", (event) => {
       if (isMac) {
         const consoleState = options.consoleUrl ? "Web / mobile console link available via /bot-link." : ""
         event.system.push({
           type: "text",
-          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), host screen/GUI fallback, and Keychain-backed secret entry (\`computer_secret_request\` then \`computer_secret_type\`; never ask for passwords in chat). Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). ${consoleState}`.trim(),
+          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), host screen/GUI fallback, and Keychain-backed secret entry (\`computer_secret_request\` then \`computer_secret_type\`; never ask for passwords in chat). Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and paste the console link only when the tool result gives you one (the user has no Live Screen panel). [Controllers] ${viewers.describe(event.sessionID)} ${consoleState}`.trim(),
         } as any)
       }
       const resumed = chatResumedTakeovers.get(event.sessionID)
@@ -430,18 +479,17 @@ export default Plugin.define({
       unsubRes()
       unsubSecretReq()
       unsubSecretRes()
-      secrets.dispose()
       routines.dispose()
-      stream?.dispose()
-      disposeDesktopHelpers()
-      takeovers.dispose()
-      awake.dispose()
+      shared.release()
       await Promise.allSettled([
         toolReg.dispose(),
         cmdReg.dispose(),
         skillReg.dispose(),
         contextHookReg.dispose(),
         promptHookReg.dispose(),
+        toolBeforeReg.dispose(),
+        toolAfterReg.dispose(),
+        idleHookReg.dispose(),
         permHookReg.dispose(),
         rpcReg.dispose(),
       ])

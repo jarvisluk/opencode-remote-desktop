@@ -4,7 +4,7 @@ import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
 import { createGuiTranslator, type GuiMessageKey, type GuiTranslate } from "../i18n/gui.ts"
-import { T, details, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
+import { T, agentCard, details, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -94,6 +94,8 @@ export function LiveStreamView(props: {
   const [link, setLink] = createSignal<LinkStats | null>(null)
   const [connectMs, setConnectMs] = createSignal(0)
   const [focused, setFocused] = createSignal(false)
+  const [screen, setScreen] = createSignal<{ owner: string; tool?: string; sessionIDs: string[] }>({ owner: "idle", sessionIDs: [] })
+  const agentBusy = () => screen().owner === "agent"
 
   let root: HTMLDivElement | undefined
   let viewport: HTMLDivElement | undefined
@@ -103,6 +105,7 @@ export function LiveStreamView(props: {
   let session: string | undefined
   let statsTimer: ReturnType<typeof setInterval> | undefined
   let takeoverTimer: ReturnType<typeof setInterval> | undefined
+  let screenTimer: ReturnType<typeof setInterval> | undefined
   let connectTimer: ReturnType<typeof setTimeout> | undefined
   let moveTimer: ReturnType<typeof setTimeout> | undefined
   let wheelRaf: number | undefined
@@ -159,6 +162,7 @@ export function LiveStreamView(props: {
     disposed = true
     clearInterval(statsTimer)
     clearInterval(takeoverTimer)
+    clearInterval(screenTimer)
     clearTimeout(connectTimer)
     clearInputTimers()
     pc?.close()
@@ -281,7 +285,8 @@ export function LiveStreamView(props: {
   }
 
   const send = (msg: Record<string, unknown>, ephemeral = false) => {
-    if (dc?.readyState !== "open") return
+    // The server drops it too; skipping here keeps a locked view from queueing input.
+    if (agentBusy() || dc?.readyState !== "open") return
     if (ephemeral && dc.bufferedAmount > 65_536) return
     dc.send(JSON.stringify(msg))
   }
@@ -422,6 +427,20 @@ export function LiveStreamView(props: {
     } catch {}
   }
 
+  const checkScreen = async () => {
+    try {
+      const state = await rpc()?.screenState({})
+      if (state) setScreen(state)
+    } catch {}
+  }
+
+  const forceTakeover = async () => {
+    try {
+      await rpc()?.forceTakeover({ sessionID: screen().sessionIDs[0] ?? curSession()?.id })
+    } catch {}
+    await Promise.all([checkScreen(), props.takeoverReason ? undefined : checkTakeovers()])
+  }
+
   createEffect(() => {
     curSession()?.id
     if (!props.takeoverReason) void checkTakeovers()
@@ -429,6 +448,8 @@ export function LiveStreamView(props: {
 
   onMount(() => {
     void connect().catch((err) => giveUp(err?.message ?? String(err)))
+    void checkScreen()
+    screenTimer = setInterval(checkScreen, 1500)
     if (!props.takeoverReason) {
       void checkTakeovers()
       takeoverTimer = setInterval(checkTakeovers, 3000)
@@ -460,7 +481,13 @@ export function LiveStreamView(props: {
   const videoStyle = () => {
     const z = zoom()
     const { w, h: vh } = dims()
-    const base = { "object-fit": "contain", display: "block", cursor: "default", outline: focused() ? `2px solid ${T.focus}` : "none", "outline-offset": "-2px" }
+    const base = {
+      "object-fit": "contain",
+      display: "block",
+      cursor: agentBusy() ? "not-allowed" : "default",
+      outline: agentBusy() || focused() ? `2px solid ${T.focus}` : "none",
+      "outline-offset": "-2px",
+    }
     if (z === null || !w) return { ...base, width: "100%", height: "100%" }
     return { ...base, width: `${Math.round(w * z)}px`, height: `${Math.round(vh * z)}px`, "max-width": "none", flex: "none", margin: "auto" }
   }
@@ -556,7 +583,12 @@ export function LiveStreamView(props: {
         { title: () => t("status.group.input"), rows: [
           {
             label: () => t("status.row.pointerKeyboard"),
-            value: () => (link() && dc?.readyState === "open" ? t("webrtc.inputReady") : t("webrtc.inputNotReady")),
+            value: () =>
+              agentBusy()
+                ? t("screen.inputLocked")
+                : link() && dc?.readyState === "open"
+                  ? t("webrtc.inputReady")
+                  : t("webrtc.inputNotReady"),
           },
         ] },
       ]),
@@ -568,7 +600,12 @@ export function LiveStreamView(props: {
     }, {
       text: () => t("takeover.cardPrefix", { reason: activeTakeover() }),
       resume: () => t("takeover.cardResume"),
-    }) : null),
+    }) : agentBusy() ? agentCard(
+      ui,
+      () => (screen().tool ? t("screen.agentOperatingTool", { tool: screen().tool! }) : t("screen.agentOperating")),
+      () => void forceTakeover(),
+      () => t("screen.forceTakeover"),
+    ) : null),
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
       iconButton(ui, { icon: "collapse", label: () => t("webrtc.btn.fit"), onClick: (_e) => { setZoom(null); invalidateRect() } }),
       iconButton(ui, { icon: "outline-magnifier-minus", label: () => t("webrtc.btn.zoomOut"), onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),

@@ -4,9 +4,13 @@ export interface ViewerBeat {
   readonly clientId: string
   readonly platform: "web" | "desktop"
   readonly mobile: boolean
+  /** Session currently open in this controller on this server, if any. */
+  readonly sessionID?: string
+  /** Whether the Live Screen panel (or its mobile tab) can show for that session; hidden when the desktop app is on the host itself. */
+  readonly panel: boolean
 }
 
-/** Tracks which controllers have the bot GUI plugin loaded, from the heartbeats it sends over RPC. */
+/** Tracks which controllers have the bot GUI plugin loaded and which session each is looking at, from RPC heartbeats. */
 export class ViewerRegistry {
   private readonly beats = new Map<string, ViewerBeat & { at: number }>()
 
@@ -15,15 +19,31 @@ export class ViewerRegistry {
     this.beats.set(input.clientId, { ...input, at: now })
   }
 
-  /** True when a controller with the Live Screen panel is watching, so no link needs to be sent. */
-  hasPanelViewer(now = Date.now()): boolean {
-    for (const b of this.beats.values()) if (!b.mobile && now - b.at <= FRESH_MS) return true
-    return false
+  /** Fresh controllers that have this session open. */
+  watching(sessionID: string, now = Date.now()): ViewerBeat[] {
+    return [...this.beats.values()].filter((b) => b.sessionID === sessionID && now - b.at <= FRESH_MS)
   }
 
-  /** True when nothing has reported at all: the controller probably has no plugin (TUI, third-party client). */
-  isUnknown(now = Date.now()): boolean {
-    for (const b of this.beats.values()) if (now - b.at <= FRESH_MS) return false
-    return true
+  /** True when some controller showing this session can open Live Screen for it. */
+  hasPanelViewer(sessionID: string, now = Date.now()): boolean {
+    return this.watching(sessionID, now).some((b) => b.panel)
+  }
+
+  /**
+   * True when the user needs the console link: no controller shows Live Screen for this session. A desktop app
+   * without a panel is the app on the host itself, where the screen is already in front of the user.
+   */
+  needsLink(sessionID: string, now = Date.now()): boolean {
+    const w = this.watching(sessionID, now)
+    return w.length === 0 || (!w.some((b) => b.panel) && w.some((b) => b.platform !== "desktop"))
+  }
+
+  /** One line for the model describing who is controlling this session. */
+  describe(sessionID: string, now = Date.now()): string {
+    const w = this.watching(sessionID, now)
+    if (w.length === 0) return "No desktop app with the bot plugin reports this session open, so the user is likely on the web/mobile client, the TUI or a third-party client. None of these has a Live Screen panel (plugin panels load only in the desktop app); takeover goes through the console link, which you must give the user."
+    const kind = (b: ViewerBeat) =>
+      `${b.platform}${b.mobile ? " (mobile)" : ""} — ${b.panel ? "Live Screen panel available" : b.platform === "desktop" ? "on the host Mac itself, no panel needed" : "no Live Screen panel"}`
+    return `This session is open in: ${w.map(kind).join("; ")}.`
   }
 }

@@ -10,9 +10,14 @@ export const guiEn = {
 
   "takeover.defaultReason": "Manual action required",
   "takeover.waitingTitle": "Waiting for Human Takeover",
-  "takeover.toastResume": "Done, resume AI",
+  "takeover.toastOpen": "Open session",
   "takeover.cardPrefix": "Human takeover: {{reason}}",
   "takeover.cardResume": "Done & Resume AI",
+  "screen.agentOperating": "AI is operating the screen · input locked",
+  "screen.agentOperatingTool": "AI is operating the screen ({{tool}}) · input locked",
+  "screen.forceTakeover": "Force takeover",
+  "screen.forceTakeoverConfirm": "Interrupt the AI agent and take over the screen?",
+  "screen.inputLocked": "Locked (AI is operating)",
 
   "secret.title": "AI needs a secret",
   "secret.storedAs": "Saved to the Mac's Keychain as {{name}}",
@@ -118,9 +123,14 @@ export const guiZh: Record<GuiMessageKey, string> = {
 
   "takeover.defaultReason": "需要手动操作",
   "takeover.waitingTitle": "等待人工接管",
-  "takeover.toastResume": "已完成，恢复 AI",
+  "takeover.toastOpen": "打开会话",
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成并恢复 AI",
+  "screen.agentOperating": "AI 正在操作屏幕 · 输入已锁定",
+  "screen.agentOperatingTool": "AI 正在操作屏幕（{{tool}}）· 输入已锁定",
+  "screen.forceTakeover": "强制接管",
+  "screen.forceTakeoverConfirm": "要中断 AI 并接管屏幕吗？",
+  "screen.inputLocked": "已锁定（AI 操作中）",
 
   "secret.title": "AI 需要一个密钥",
   "secret.storedAs": "将以 {{name}} 存入 Mac 钥匙串",
@@ -224,9 +234,14 @@ export const guiZht: Record<GuiMessageKey, string> = {
 
   "takeover.defaultReason": "需要手動操作",
   "takeover.waitingTitle": "等待人工接管",
-  "takeover.toastResume": "已完成，恢復 AI",
+  "takeover.toastOpen": "開啟會話",
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成並恢復 AI",
+  "screen.agentOperating": "AI 正在操作螢幕 · 輸入已鎖定",
+  "screen.agentOperatingTool": "AI 正在操作螢幕（{{tool}}）· 輸入已鎖定",
+  "screen.forceTakeover": "強制接管",
+  "screen.forceTakeoverConfirm": "要中斷 AI 並接管螢幕嗎？",
+  "screen.inputLocked": "已鎖定（AI 操作中）",
 
   "secret.title": "AI 需要一個密鑰",
   "secret.storedAs": "將以 {{name}} 存入 Mac 鑰匙圈",

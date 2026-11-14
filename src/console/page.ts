@@ -272,7 +272,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
     .key:active { background: var(--surface-active); }
 
     /* 接管提示：AI 等待时始终显示 */
-    #takeoverBanner {
+    #takeoverBanner, #agentBanner {
       position: fixed;
       left: 50%;
       top: calc(58px + var(--safe-top));
@@ -287,10 +287,16 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       border-color: rgba(245, 200, 75, 0.45);
       transform: translateX(-50%);
     }
-    #takeoverBanner[data-open="true"] { display: flex; }
-    body[data-top="open"] #takeoverBanner { top: calc(62px + var(--safe-top)); }
-    #takeoverBanner p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #takeoverBanner[data-open="true"], #agentBanner[data-open="true"] { display: flex; }
+    body[data-top="open"] #takeoverBanner, body[data-top="open"] #agentBanner { top: calc(62px + var(--safe-top)); }
+    #takeoverBanner p, #agentBanner p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #takeoverBanner .warn { color: var(--warning); flex-shrink: 0; }
+    #agentBanner { border-color: rgba(96, 165, 250, 0.5); }
+    #agentBanner .warn { color: var(--interactive); flex-shrink: 0; animation: agentPulse 1.2s ease-in-out infinite; }
+    @keyframes agentPulse { 50% { opacity: 0.3; } }
+    /* AI 操作中：画面只读 */
+    body[data-screen="agent"] #screenWrap { outline: 2px solid var(--interactive); outline-offset: -2px; cursor: not-allowed; }
+    body[data-screen="agent"] #dock { opacity: 0.5; pointer-events: none; }
     .btn-primary {
       height: 30px;
       padding: 0 12px;
@@ -442,6 +448,12 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l5-5 5 5"/></svg>
     </button>
   </header>
+
+  <div id="agentBanner" class="glass" role="status">
+    <span class="warn">●</span>
+    <p id="agentText" data-i18n="agentOperating">${s.agentOperating}</p>
+    <button class="btn-primary" id="forceBtn" type="button" data-i18n="forceTakeoverBtn">${s.forceTakeoverBtn}</button>
+  </div>
 
   <div id="takeoverBanner" class="glass" role="alert">
     <span class="warn">●</span>
@@ -619,6 +631,9 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       const fpsSelect = $("fpsSelect");
       const banner = $("takeoverBanner");
       const reasonEl = $("takeoverReason");
+const agentBanner = $("agentBanner");
+const agentText = $("agentText");
+let screenOwner = "idle";
       const textInput = $("textInput");
       const sendBtn = $("sendBtn");
       const topToggle = $("topToggle");
@@ -673,6 +688,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       }
 
       function sendDc(msg, ephemeral) {
+        if (screenOwner === "agent") return true;
         if (!dc || dc.readyState !== "open") return false;
         if (ephemeral && dc.bufferedAmount > 65536) return true;
         dc.send(JSON.stringify(msg));
@@ -890,7 +906,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
 
       async function fetchState() {
         try {
-          const [win, tk] = await Promise.all([rpc("listWindows"), rpc("listTakeovers")]);
+          const [win, tk, scr] = await Promise.all([rpc("listWindows"), rpc("listTakeovers"), rpc("screenState")]);
           const data = { windows: win.windows, takeovers: tk.items };
           const rtcOpt = fpsSelect.querySelector('option[value="webrtc"]');
           if (rtcOpt) rtcOpt.disabled = !streamAvailable;
@@ -915,6 +931,12 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
           } else {
             banner.dataset.open = "false";
           }
+
+          screenOwner = scr.owner;
+          document.body.dataset.screen = scr.owner;
+          agentBanner.dataset.open = String(scr.owner === "agent");
+          agentBanner.dataset.session = (scr.sessionIDs || [])[0] || "";
+          agentText.textContent = scr.tool ? t("agentOperatingTool", { tool: scr.tool }) : t("agentOperating");
         } catch {}
       }
 
@@ -1001,6 +1023,10 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       }
 
       async function sendInput(payload) {
+        if (screenOwner === "agent") {
+          setStatus(t("inputLockedAgent"), "error");
+          return;
+        }
         if (payload.kind === "type" && payload.text && sendDc({ t: "text", s: payload.text })) {
           return;
         }
@@ -1232,6 +1258,14 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       });
       fpsSelect.addEventListener("change", scheduleLoop);
 
+      $("forceBtn").addEventListener("click", async () => {
+        if (!confirm(t("forceTakeoverConfirm"))) return;
+        const sid = agentBanner.dataset.session || targetSession || undefined;
+        await rpc("forceTakeover", sid ? { sessionID: sid } : {});
+        await fetchState();
+        setStatus(t("forceTakeoverDone"), "online");
+      });
+
       $("resumeBtn").addEventListener("click", async () => {
         const sid = banner.dataset.session || targetSession || undefined;
         await rpc("resolveTakeover", sid ? { sessionID: sid, note: "User completed takeover via Web Console" } : { note: "User completed takeover via Web Console" });
@@ -1249,7 +1283,7 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
           scheduleLoop();
         }
       });
-      setInterval(fetchState, 3000);
+      setInterval(fetchState, 1500);
       fetchSecrets();
       setInterval(fetchSecrets, 2000);
       }

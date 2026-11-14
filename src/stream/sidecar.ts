@@ -35,6 +35,7 @@ export class StreamSidecar {
   private proc: ChildProcessWithoutNullStreams | null = null
   private nextId = 1
   private pending = new Map<number, Pending>()
+  private inputEnabled = true
   private readonly options: StreamOptions
 
   constructor(options: StreamOptions) {
@@ -96,6 +97,7 @@ export class StreamSidecar {
       this.pending.clear()
     })
     this.proc = proc
+    if (!this.inputEnabled) proc.stdin.write(JSON.stringify({ t: "input", enabled: false }) + "\n")
     return proc
   }
 
@@ -122,6 +124,12 @@ export class StreamSidecar {
 
   async close(session: string): Promise<void> {
     if (this.proc) await this.request({ t: "close", session })
+  }
+
+  /** Gates DataChannel input from every viewer; only sent once the sidecar is running, which starts enabled. */
+  async setInput(enabled: boolean): Promise<void> {
+    this.inputEnabled = enabled
+    if (this.proc) await this.request({ t: "input", enabled })
   }
 
   dispose(): void {

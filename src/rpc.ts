@@ -207,8 +207,10 @@ export const BotRpc = Rpc.define({
           clientId: { type: "string" },
           platform: { type: "string", enum: ["web", "desktop"] },
           mobile: { type: "boolean" },
+          sessionID: { type: "string" },
+          panel: { type: "boolean" },
         },
-        required: ["clientId", "platform", "mobile"],
+        required: ["clientId", "platform", "mobile", "panel"],
         additionalProperties: false,
       },
       output: {
@@ -289,6 +291,40 @@ export const BotRpc = Rpc.define({
         type: "object",
         properties: { ok: { type: "boolean" } },
         required: ["ok"],
+        additionalProperties: false,
+      },
+    },
+    screenState: {
+      input: { type: "object", additionalProperties: false },
+      output: {
+        type: "object",
+        properties: {
+          owner: { type: "string", enum: ["idle", "agent", "human"] },
+          sessionIDs: { type: "array", items: { type: "string" } },
+          tool: { type: "string" },
+          since: { type: "number" },
+          takeoverId: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["owner", "sessionIDs"],
+        additionalProperties: false,
+      },
+    },
+    forceTakeover: {
+      input: {
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          interrupted: { type: "number" },
+          takeoverId: { type: "string" },
+        },
+        required: ["interrupted"],
         additionalProperties: false,
       },
     },
