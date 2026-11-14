@@ -1,5 +1,8 @@
 # opencode-remote-desktop
 
+[![npm](https://img.shields.io/npm/v/opencode-remote-desktop.svg)](https://www.npmjs.com/package/opencode-remote-desktop) [![license](https://img.shields.io/npm/l/opencode-remote-desktop.svg)](LICENSE) [![node](https://img.shields.io/node/v/opencode-remote-desktop.svg)](https://nodejs.org)
+
+
 让 OpenCode 拥有一台**永远在线、AI 可驾驶、人可随时接管的真实 Mac**。
 
 `opencode-remote-desktop` 是 OpenCode 的 macOS 宿主机插件：远程看到并操作那台 Mac，需要时把键鼠交还给人。
