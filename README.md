@@ -1,8 +1,8 @@
-# opendot
+# opencode-remote-desktop
 
 让 OpenCode 拥有一台**永远在线、AI 可驾驶、人可随时接管的真实 Mac**。
 
-`opendot` 是 OpenCode 的 macOS 宿主机插件。
+`opencode-remote-desktop` 是 OpenCode 的 macOS 宿主机插件：远程看到并操作那台 Mac，需要时把键鼠交还给人。
 
 OpenCode 以服务端形式跑在你的 macOS 机器（Mac mini / Mac Studio / MacBook）上时，这个插件让 Agent 直接操控**这台你自己的电脑**：复用本机已登录的浏览器与账号，通过 macOS 无障碍树操作真实桌面应用，客户端断开也能 7×24 常驻执行例行任务。遇到只有人才能过的关卡（2FA、扫码登录、人脸识别、支付密码），AI 主动挂起，把屏幕与键鼠**交还给你**——在浏览器或手机上操作完，一键把控制权还给 AI。
 
@@ -36,7 +36,7 @@ OpenCode 以服务端形式跑在你的 macOS 机器（Mac mini / Mac Studio / M
 ┌──────────────────────────▼─────────────────────────────┐
 │            OpenCode Server（macOS 宿主机）              │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ opendot                                          │  │
+│  │ opencode-remote-desktop                          │  │
 │  │  TakeoverManager  挂起/恢复状态机                │  │
 │  │  ScreenLock       谁在控制屏幕（AI / 人）        │  │
 │  │  BotRpc           面板与控制台的唯一通道         │  │
@@ -80,7 +80,7 @@ npm run build:native     # 需要 Go 与 swiftc
 {
   "plugins": [
     {
-      "source": "opendot",
+      "source": "opencode-remote-desktop",
       "options": {
         "consoleUrl": "https://bot-console.pages.dev",
         "keepAwake": "active",
