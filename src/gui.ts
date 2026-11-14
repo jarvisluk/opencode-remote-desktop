@@ -437,7 +437,7 @@ export default Plugin.define({
     // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
     // On the web the "local" server is the one serving the page, which is the host itself, seen from another device.
     const remote = (session?: { server: ServerRef }) =>
-      !!session && (session.server.local === false || ctx.app.platform === "web")
+      !!session && session.server.local === false
 
     // Reactive map of active takeovers across connected servers, keyed by `${serverId}\n${sessionID}` (SessionRef.key).
     const [takeoversBySession, setTakeoversBySession] = createSignal<Record<string, { id: string; reason: string }>>({})

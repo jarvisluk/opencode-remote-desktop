@@ -245,6 +245,7 @@ test("console link carries server and session but no credentials; viewer registr
 
   // A desktop app watching another session must not hide this one from a web user.
   const w = new ViewerRegistry()
+  assert.match(w.describe("s1"), /web\/mobile/)
   w.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "other", panel: true })
   w.beat({ clientId: "w", platform: "web", mobile: false, sessionID: "s1", panel: false })
   assert.equal(w.hasPanelViewer("s1"), false)

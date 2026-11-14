@@ -43,7 +43,7 @@ export class ViewerRegistry {
   /** One line for the model describing who is controlling this session. */
   describe(sessionID: string, now = Date.now()): string {
     const w = this.watching(sessionID, now)
-    if (w.length === 0) return "No controller with the bot plugin reports this session open (TUI, third-party client, or web/mobile without the plugin)."
+    if (w.length === 0) return "No desktop app with the bot plugin reports this session open, so the user is likely on the web/mobile client, the TUI or a third-party client. None of these has a Live Screen panel (plugin panels load only in the desktop app); takeover goes through the console link posted in the chat."
     const kind = (b: ViewerBeat) =>
       `${b.platform}${b.mobile ? " (mobile)" : ""} — ${b.panel ? "Live Screen panel available" : "no Live Screen panel"}`
     return `This session is open in: ${w.map(kind).join("; ")}.`
