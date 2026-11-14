@@ -10,7 +10,6 @@ export const guiEn = {
 
   "takeover.defaultReason": "Manual action required",
   "takeover.waitingTitle": "Waiting for Human Takeover",
-  "takeover.toastResume": "Done, resume AI",
   "takeover.toastOpen": "Open session",
   "takeover.cardPrefix": "Human takeover: {{reason}}",
   "takeover.cardResume": "Done & Resume AI",
@@ -124,7 +123,6 @@ export const guiZh: Record<GuiMessageKey, string> = {
 
   "takeover.defaultReason": "需要手动操作",
   "takeover.waitingTitle": "等待人工接管",
-  "takeover.toastResume": "已完成，恢复 AI",
   "takeover.toastOpen": "打开会话",
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成并恢复 AI",
@@ -236,7 +234,6 @@ export const guiZht: Record<GuiMessageKey, string> = {
 
   "takeover.defaultReason": "需要手動操作",
   "takeover.waitingTitle": "等待人工接管",
-  "takeover.toastResume": "已完成，恢復 AI",
   "takeover.toastOpen": "開啟會話",
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成並恢復 AI",

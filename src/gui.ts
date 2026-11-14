@@ -523,18 +523,6 @@ export default Plugin.define({
               if (target && remote(target)) ctx.layout.open(TAB_KEY, target, { tab: "open" })
             },
           },
-          {
-            label: ctx.t("takeover.toastResume"),
-            run() {
-              void server.client
-                .rpc(BotRpc)
-                .resolveTakeover({ sessionID: item.sessionID, note: "User completed takeover via Desktop notification" })
-                .then(() => {
-                  clearTakeoverEntry(server.id, item.sessionID)
-                })
-                .catch(() => {})
-            },
-          },
         ],
       })
       activeToasts.set(key, toast)
