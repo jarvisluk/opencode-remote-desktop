@@ -1,8 +1,22 @@
 {
-  "name": "opencode-bot",
+  "name": "opencode-bot-host",
   "version": "0.1.0",
-  "description": "An always-on macOS host for OpenCode Server: real desktop & signed-in browser control, live Web human takeover, and 24/7 background routines.",
+  "description": "A macOS host for OpenCode: real desktop and signed-in browser control, live human takeover from any browser, and 24/7 routines.",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "macos",
+    "computer-use",
+    "desktop-automation",
+    "accessibility",
+    "human-takeover",
+    "automation"
+  ],
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./rpc": "./src/rpc.ts",
@@ -10,7 +24,9 @@
   },
   "files": [
     "src",
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "native"
   ],
   "scripts": {
     "build": "node scripts/build-gui.js",
@@ -20,7 +36,8 @@
     "harness": "node test/stream-harness.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "build:pages": "node scripts/build-pages.js"
+    "build:pages": "node scripts/build-pages.js",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
@@ -30,5 +47,8 @@
   },
   "peerDependencies": {
     "@opencode/plugin": "^2.2.7"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
