@@ -3,7 +3,7 @@ import type { BotOptions } from "./options.ts"
 import { captureScreenJpeg, runAgentDesktop } from "./macos/desktop.ts"
 import type { KeepAwakeController } from "./macos/awake.ts"
 import type { MacBrowserController } from "./macos/browser.ts"
-import type { WebTakeoverConsole } from "./takeover/web-console.ts"
+import { consoleLink } from "./console/link.ts"
 import type { ViewerRegistry } from "./takeover/viewers.ts"
 import type { TakeoverManager } from "./takeover/manager.ts"
 import type { RoutineScheduler } from "./routines/scheduler.ts"
@@ -18,14 +18,13 @@ export function registerBotTools(
     isMac: boolean
     awake: KeepAwakeController
     takeovers: TakeoverManager
-    webConsole: WebTakeoverConsole
     viewers?: ViewerRegistry
     browser: MacBrowserController
     routines: RoutineScheduler
     permissionAssert: (params: any) => Promise<void>
   },
 ): void {
-  const { options, isMac, awake, takeovers, webConsole, viewers, browser, routines, permissionAssert } = context
+  const { options, isMac, awake, takeovers, viewers, browser, routines, permissionAssert } = context
 
   editor.namespace({
     name: "computer",
@@ -50,7 +49,7 @@ export function registerBotTools(
       const summary = await collectBotStatus({
         awake,
         browser,
-        webConsole,
+        options,
         takeovers,
         routines,
         sessionID: toolCtx.sessionID,
@@ -64,7 +63,7 @@ export function registerBotTools(
             keepAwakeActive: summary.keepAwakeActive,
             browserMode: summary.browserMode,
             liveScreenAvailable: true,
-            webConsoleEnabled: summary.consoleUrls.length > 0,
+            webConsoleEnabled: Boolean(summary.consoleUrl),
             activeTakeovers: summary.activeTakeovers,
             routinesCount: summary.routines.length,
             ...(summary.windows ? { windows: summary.windows } : {}),
@@ -310,16 +309,16 @@ export function registerBotTools(
         app: input.app,
       })
 
-      // No heartbeat at all means the controller has no bot GUI plugin: hand the agent a one-time link for its own side browser.
-      const sideUrl = viewers?.isUnknown() ? webConsole.getShareUrls(item.sessionID)[0] : undefined
+      // No heartbeat at all means the controller has no bot GUI plugin: hand the agent the console link for its own side browser.
+      const sideUrl = viewers?.isUnknown() ? consoleLink(options, item.sessionID) : undefined
 
       return {
         content: [
           `Human takeover requested (${item.id}): "${input.reason}".`,
           `- Built-in Live Screen panel and takeover banner have been triggered automatically for this session.`,
-          `- If the user's client has no Live Screen panel (mobile, web without the plugin), a one-time link was already posted into the chat; do not repeat it.`,
+          `- If the user's client has no Live Screen panel (mobile, web without the plugin), a console link was already posted into the chat; do not repeat it.`,
           ...(sideUrl
-            ? [`- The user's client appears to have no Live Screen panel. If you have a side/in-app browser tool (e.g. browser.tabs.open), open this one-time URL once so the user can take over; never print it in your reply: ${sideUrl}`]
+            ? [`- The user's client appears to have no Live Screen panel. If you have a side/in-app browser tool (e.g. browser.tabs.open), open this URL once so the user can take over (the page asks for the server password); never print it in your reply: ${sideUrl}`]
             : []),
           `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click the resume button (or reply in chat) when done.`,
           `- Do NOT paste standalone Web Console URLs unless the user is on mobile/external browser without Live Screen or asks for a link (they can run /bot-link anytime).`,

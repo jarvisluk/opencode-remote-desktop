@@ -19,7 +19,8 @@
     "install:macbook": "sh scripts/install-macbook.sh",
     "harness": "node test/stream-harness.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "build:pages": "node scripts/build-pages.js"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
