@@ -4,7 +4,7 @@ import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
 import { createGuiTranslator, type GuiMessageKey, type GuiTranslate } from "../i18n/gui.ts"
-import { T, agentCard, details, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
+import { T, agentCard, details, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -462,6 +462,7 @@ export function LiveStreamView(props: {
   const server = () => curSession()?.server
   const ui = props.ui
   const fill = windowFill(() => root)
+  const secret = secretPrompt(ui, { rpc: () => rpc(), sessionID: () => curSession()?.id, t })
 
   const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.routeType === "relay" ? "warning" : "success")
   const summary = () => {
@@ -592,7 +593,7 @@ export function LiveStreamView(props: {
         ] },
       ]),
     }),
-    () => activeTakeover() ? takeoverCard(ui, activeTakeover, async () => {
+    () => (secret.pending() ? secret.card() : activeTakeover() ? takeoverCard(ui, activeTakeover, async () => {
       await rpc()?.resolveTakeover({ sessionID: curSession()?.id, note: "User completed action in Live Screen" })
       setTakeover("")
       props.onResolveTakeover?.()
@@ -604,7 +605,7 @@ export function LiveStreamView(props: {
       () => (screen().tool ? t("screen.agentOperatingTool", { tool: screen().tool! }) : t("screen.agentOperating")),
       () => void forceTakeover(),
       () => t("screen.forceTakeover"),
-    ) : null,
+    ) : null),
     h("div", { style: floating("bottom-right", { display: "flex", "align-items": "center", gap: T.sp(0.5), padding: T.sp(1) }) }, [
       iconButton(ui, { icon: "collapse", label: () => t("webrtc.btn.fit"), onClick: (_e) => { setZoom(null); invalidateRect() } }),
       iconButton(ui, { icon: "outline-magnifier-minus", label: () => t("webrtc.btn.zoomOut"), onClick: (_e) => zoomTo((zoom() ?? fitScale()) / 1.25) }),

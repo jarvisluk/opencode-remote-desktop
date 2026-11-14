@@ -48,6 +48,9 @@ const serverEn = {
   "takeover.forcedReason": "The user took over the screen and interrupted the agent",
   "takeover.linkDescription": "Human takeover link",
   "takeover.linkText": "Human takeover needed: {{reason}}\nOpen this link in a browser and enter the OpenCode server password (run /bot-link anytime):\n{{url}}",
+  "secret.linkDescription": "Secret entry link",
+  "secret.linkText": "The AI needs a secret: {{reason}}\nOpen this link in a browser, enter the OpenCode server password, then type the secret into the card (it is stored in the Mac's Keychain, never in the chat):\n{{url}}",
+  "permission.keychainRead": "This command reads the macOS Keychain, which may expose a stored secret. Allow it only if you asked for it.",
   "permission.highRisk": "Bot detected sensitive keyword \"{{keyword}}\". Please confirm whether to allow this action on your Mac.",
 
   "cmd.bot.description": "Inspect macOS host status, Accessibility/Screen Recording permissions, and remote Live Screen console URLs",
@@ -142,6 +145,9 @@ const serverZh: Record<ServerMessageKey, string> = {
   "takeover.forcedReason": "用户已接管屏幕并中断了 agent",
   "takeover.linkDescription": "人工接管链接",
   "takeover.linkText": "需要人工接管：{{reason}}\n请在浏览器中打开以下链接，并输入 OpenCode 服务器密码（随时可运行 /bot-link 再次获取）：\n{{url}}",
+  "secret.linkDescription": "密钥输入链接",
+  "secret.linkText": "AI 需要一个密钥：{{reason}}\n请在浏览器中打开以下链接，输入 OpenCode 服务器密码，再在卡片里填写密钥（它只存进 Mac 的钥匙串，不会出现在对话中）：\n{{url}}",
+  "permission.keychainRead": "这条命令会读取 macOS 钥匙串，可能取出已保存的密钥。只有确实是你要求的才允许。",
   "permission.highRisk": "Bot 检测到敏感操作关键词「{{keyword}}」，请确认是否允许在 Mac 上执行。",
 
   "cmd.bot.description": "查看 Mac 宿主机状态、无障碍/录屏权限及远程实时画面控制台链接",
@@ -234,6 +240,9 @@ const serverZht: Record<ServerMessageKey, string> = {
   "takeover.forcedReason": "使用者已接管螢幕並中斷了 agent",
   "takeover.linkDescription": "人工接管連結",
   "takeover.linkText": "需要人工接管：{{reason}}\n請在瀏覽器中開啟以下連結，並輸入 OpenCode 伺服器密碼（隨時可執行 /bot-link 再次取得）：\n{{url}}",
+  "secret.linkDescription": "密鑰輸入連結",
+  "secret.linkText": "AI 需要一個密鑰：{{reason}}\n請在瀏覽器中開啟以下連結，輸入 OpenCode 伺服器密碼，再在卡片中填寫密鑰（它只存進 Mac 的鑰匙圈，不會出現在對話中）：\n{{url}}",
+  "permission.keychainRead": "這條指令會讀取 macOS 鑰匙圈，可能取出已儲存的密鑰。只有確實是你要求的才允許。",
   "permission.highRisk": "Bot 偵測到敏感操作關鍵字「{{keyword}}」，請確認是否允許在 Mac 上執行。",
 
   "cmd.bot.description": "檢視 Mac 宿主機狀態、輔助使用/螢幕錄製權限及遠端即時畫面控制台連結",

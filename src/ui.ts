@@ -123,8 +123,10 @@ export function takeoverCard(
   return h("div", {
     style: floating("top-right", { background: T.dangerBg, display: "flex", "align-items": "center", gap: T.sp(2), padding: `${T.sp(1)} ${T.sp(1)} ${T.sp(1)} ${T.sp(3)}`, "max-width": "65%" }),
   }, [
-    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
-    h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
+    h("span", { title: reason, style: { color: T.danger, "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis", "min-width": "0" } }, () => (labels?.text ? labels.text() : `Human takeover: ${reason()}`)),
+    h("div", { style: { flex: "none", "white-space": "nowrap", display: "flex" } }, [
+      h(ui.Button, { variant: "contrast", size: "small", onClick: (_e: MouseEvent) => resume(), children: (labels?.resume ?? "Done & Resume AI") as any }),
+    ]),
   ]) as unknown as JSX.Element
 }
 
@@ -139,6 +141,98 @@ export function agentCard(ui: Ui, text: () => string, force: () => void, forceLa
     h("span", { title: text, style: { "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis" } }, text),
     h(ui.Button, { variant: "danger", size: "small", onClick: (_e: MouseEvent) => force(), children: forceLabel as any }),
   ]) as unknown as JSX.Element
+}
+
+interface SecretRequest {
+  id: string
+  sessionID: string
+  name: string
+  reason: string
+}
+
+/**
+ * Polls the host for a pending `computer_secret_request` on this session and renders its top-right entry card.
+ * The typed value lives only in this card until it is submitted. Call inside a component.
+ */
+export function secretPrompt(ui: Ui, p: { rpc: () => any; sessionID: () => string | undefined; t: GuiTranslate }) {
+  const [req, setReq] = createSignal<SecretRequest | null>(null)
+  const [value, setValue] = createSignal("")
+  const [error, setError] = createSignal("")
+  const [busy, setBusy] = createSignal(false)
+
+  const show = (next: SecretRequest | null) => {
+    if ((next?.id ?? "") === (req()?.id ?? "")) return
+    setValue("")
+    setError("")
+    setReq(next)
+  }
+  const poll = async () => {
+    try {
+      const sid = p.sessionID()
+      const res = await p.rpc()?.listSecretRequests({})
+      show(res?.items.find((i: SecretRequest) => !sid || i.sessionID === sid) ?? null)
+    } catch {}
+  }
+  void poll()
+  const timer = setInterval(poll, 2000)
+  onCleanup(() => clearInterval(timer))
+
+  const submit = async () => {
+    const r = req()
+    if (!r || !value() || busy()) return
+    setBusy(true)
+    setError("")
+    try {
+      await p.rpc()?.secretSubmit({ id: r.id, value: value() })
+      show(null)
+    } catch (e: any) {
+      setError(e?.message ?? String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const cancel = async () => {
+    const r = req()
+    show(null)
+    if (r) await p.rpc()?.secretCancel({ id: r.id }).catch(() => {})
+  }
+
+  const card = () =>
+    req()
+      ? (h("div", {
+          style: floating("top-right", { display: "flex", "flex-direction": "column", gap: T.sp(2), padding: T.sp(3), width: "300px" }),
+        }, [
+          h("div", { style: { display: "flex", "flex-direction": "column", gap: T.sp(0.5) } }, [
+            h("span", { style: { color: T.warning } }, () => p.t("secret.title")),
+            h("span", { style: { "word-break": "break-word" } }, () => req()?.reason ?? ""),
+            h("span", { style: { color: T.faint, "font-family": T.code } }, () => p.t("secret.storedAs", { name: req()?.name ?? "" })),
+          ]),
+          h(ui.TextInput, {
+            type: "password",
+            label: (() => p.t("secret.label")) as any,
+            placeholder: (() => p.t("secret.placeholder")) as any,
+            value,
+            onInput: (v: string) => setValue(v),
+            onSubmit: (_v: string) => void submit(),
+            invalid: (() => Boolean(error())) as any,
+            autofocus: true,
+          }),
+          () => (error() ? h("span", { style: { color: T.danger, "word-break": "break-word" } }, error()) : null),
+          h("div", { style: { display: "flex", "justify-content": "flex-end", gap: T.sp(1) } }, [
+            h(ui.Button, { variant: "ghost-muted", size: "small", onClick: (_e: MouseEvent) => void cancel(), children: (() => p.t("secret.cancel")) as any }),
+            h(ui.Button, {
+              variant: "contrast",
+              size: "small",
+              busy: busy as any,
+              disabled: (() => !value()) as any,
+              onClick: (_e: MouseEvent) => void submit(),
+              children: (() => p.t("secret.submit")) as any,
+            }),
+          ]),
+        ]) as unknown as JSX.Element)
+      : null
+
+  return { pending: () => Boolean(req()), card }
 }
 
 // Height of OpenCode's own title strip (8px top inset + 48px traffic-light row, measured in the 2.3.0 shell).

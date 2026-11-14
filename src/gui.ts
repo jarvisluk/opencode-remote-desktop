@@ -1,14 +1,14 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
 import type { MountedSession, PanelProps, PanelTab, ServerRef, ToastHandle, Ui } from "@opencode/plugin/gui"
-import { createSignal, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { createSignal, createMemo, onMount, onCleanup, createEffect, untrack } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -291,6 +291,7 @@ export function LiveScreenView(props: {
 
   const server = () => curSession()?.server
   const fill = windowFill(() => rootRef)
+  const secret = secretPrompt(ui, { rpc: getClientRpc, sessionID: () => curSession()?.id, t })
   const errorText = () => {
     const err = error()
     if (!err) return ""
@@ -414,7 +415,7 @@ export function LiveScreenView(props: {
         { title: () => t("status.group.input"), rows: [{ label: () => t("status.row.pointerKeyboard"), value: () => t("jpeg.inputValue") }] },
       ]),
     }),
-    () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
+    () => (secret.pending() ? secret.card() : activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
       text: () => t("takeover.cardPrefix", { reason: activeTakeoverReason() }),
       resume: () => t("takeover.cardResume"),
     }) : agentBusy() ? agentCard(
@@ -422,7 +423,7 @@ export function LiveScreenView(props: {
       () => (screen().tool ? t("screen.agentOperatingTool", { tool: screen().tool! }) : t("screen.agentOperating")),
       () => void forceTakeover(),
       () => t("screen.forceTakeover"),
-    ) : null,
+    ) : null),
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
         label: (() => t("jpeg.textLabel")) as any,
@@ -458,13 +459,16 @@ export default Plugin.define({
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
     // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
-    const remote = (session?: { server: ServerRef }) => session?.server.local === false
+    // On the web the "local" server is the one serving the page, which is the host itself, seen from another device.
+    const remote = (session?: { server: ServerRef }) =>
+      !!session && session.server.local === false
 
     // Reactive map of active takeovers across connected servers, keyed by `${serverId}\n${sessionID}` (SessionRef.key).
     const [takeoversBySession, setTakeoversBySession] = createSignal<Record<string, { id: string; reason: string }>>({})
     const activeToasts = new Map<string, ToastHandle>()
     const autoOpenedTakeovers = new Set<string>()
     const watchedServers = new Map<string, () => void>()
+    const beaters = new Set<() => void>()
 
     const makeSessionKey = (serverId: string, sessionID: string) => `${serverId}\n${sessionID}`
 
@@ -562,13 +566,23 @@ export default Plugin.define({
       }
       void syncInitial()
 
-      // Tell the host this controller has the Live Screen panel, so it skips posting a link into the chat.
-      const beat = () =>
+      // Tell the host which of its sessions this controller shows and whether Live Screen can open there, so it knows when to post a link.
+      const beat = () => {
+        const cur = ctx.sessions.current()
+        const mine = cur?.server.id === server.id ? cur : undefined
         void rpc
-          .viewerHeartbeat({ clientId: CLIENT_ID, platform: ctx.app.platform, mobile: isNarrow() })
+          .viewerHeartbeat({
+            clientId: CLIENT_ID,
+            platform: ctx.app.platform,
+            mobile: isNarrow(),
+            ...(mine ? { sessionID: mine.id } : {}),
+            panel: remote(mine),
+          })
           .catch(() => {})
+      }
       beat()
       const beatTimer = setInterval(beat, 15_000)
+      beaters.add(beat)
 
       const unsubReq = rpc.events.on("takeoverRequested", (ev) => {
         if (disposed) return
@@ -581,11 +595,30 @@ export default Plugin.define({
         clearTakeoverEntry(server.id, data.sessionID)
       })
 
+      // The card itself is polled by the open view; the event only brings Live Screen up and notifies the user.
+      const unsubSecret = rpc.events.on("secretRequested", (ev) => {
+        if (disposed) return
+        const data = ev.data as { id: string; sessionID: string; reason: string }
+        const targetSession = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === data.sessionID)
+        if (targetSession && remote(targetSession)) ctx.layout.open(TAB_KEY, targetSession, { tab: "open" })
+        void ctx.attention
+          .notify({
+            id: data.id,
+            title: ctx.t("secret.title"),
+            message: data.reason,
+            variant: "default",
+            session: { server: server.id, id: data.sessionID },
+          })
+          .catch(() => {})
+      })
+
       watchedServers.set(server.id, () => {
         disposed = true
         clearInterval(beatTimer)
+        beaters.delete(beat)
         unsubReq()
         unsubRes()
+        unsubSecret()
       })
     }
 
@@ -621,6 +654,14 @@ export default Plugin.define({
       for (const existingId of [...watchedServers.keys()]) {
         if (!activeIds.has(existingId)) detachServer(existingId)
       }
+    })
+
+    // Switching sessions changes what this controller is watching; report it right away instead of on the next tick.
+    createEffect(() => {
+      ctx.sessions.current()
+      untrack(() => {
+        for (const b of beaters) b()
+      })
     })
 
     // If a session with a pending takeover is opened or focused after the event arrived, open Live Screen once for it.

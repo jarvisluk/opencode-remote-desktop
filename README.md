@@ -64,7 +64,7 @@
 ### 原生侧边栏标签页 (Native Side Panel)
 - **实时屏幕侧边栏 (Live Screen Tab)**:
   - 侧边栏支持直接打开 Live Screen Tab（`region: "side"`）。
-  - 仅在 App 连接远端服务（如 OpenTunnel、局域网/Tailscale 地址）时出现；连本机服务时面板、`+` 菜单项和 `/screen` 都会隐藏。
+  - 仅在 App 连接远端服务（如 OpenTunnel、局域网/Tailscale 地址）时出现；桌面 App 连本机服务时面板、`+` 菜单项和 `/screen` 都会隐藏。**Web 端（含手机浏览器）不会显示**：OpenCode 只在桌面 App 加载配置里插件的界面，web 端不加载，所以 web/手机靠控制台链接接管（见下文）。
   - OpenCode Desktop 只加载**本机**服务上插件的界面，所以控制端也要装本插件，并设 `"host": false`：只提供侧边栏，不注册 `computer_*` 工具、不开接管控制台：
     ```json
     "plugins": [{ "package": "/path/to/opencode-bot", "options": { "host": false } }]
@@ -83,13 +83,15 @@
 - `computer_browser`: 操作宿主机 Edge/Chrome 浏览器（`open`、`snapshot`、`click`、`type`、`eval`）。
 - `computer_request_takeover`: 请求人类接管屏幕并挂起当前会话，返回接管链接并在侧边栏高亮提示。
 - `computer_routine`: 管理全天候例行任务（`list`、`add`、`remove`）。
+- `computer_secret_request`: 在 Live Screen / 网页控制台弹出密钥输入卡片并等待提交，值直接存入 macOS 钥匙串（服务名 `opencode-bot`），不会返回给 Agent。
+- `computer_secret_type`: 把已存的密钥输入到桌面元素（`agent-desktop type`），只返回成功或失败。已知限制：钥匙串条目由 `/usr/bin/security` 写入，同一用户的 `security find-generic-password` 可直接读出，插件只能让这类 shell 命令弹出确认；输入时密码会短暂出现在 `agent-desktop` 的进程参数里。
 
 ### 斜杠命令 (Slash Commands)
 - `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。
 - `/bot-link`: 给出 Web 控制台链接，在手机/浏览器中打开远程屏幕；链接不含任何凭证，可安全发进会话。
 - `/bot`: 查看 Bot 状态与 Web 控制台入口。
 
-接管时，若控制端没有 Live Screen 面板（手机、未装插件，由 GUI 插件每 15 秒的心跳判断），会自动把控制台链接发进会话；完全没有心跳时，还会提示 agent 用侧边浏览器打开。
+接管时，若控制端没有 Live Screen 面板（web/手机端、TUI、未装插件，由桌面 App 里 GUI 插件每 15 秒的心跳判断），会自动把控制台链接发进会话；完全没有心跳时，还会提示 agent 用侧边浏览器打开。
 
 ### Web / 手机控制台 (Web Console)
 - 一个静态页面（`npm run build:pages` 生成到 `pages/`），部署在 Cloudflare Pages：`npx wrangler pages deploy pages --project-name bot-console`。

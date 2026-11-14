@@ -309,6 +309,47 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       white-space: nowrap;
     }
     .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.4; }
+
+    /* 密钥输入：AI 调用 computer_secret_request 时显示，优先于接管提示 */
+    #secretForm {
+      position: fixed;
+      left: 50%;
+      top: calc(58px + var(--safe-top));
+      z-index: 36;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      width: min(360px, calc(100vw - 16px));
+      padding: 12px;
+      border-radius: 12px;
+      transform: translateX(-50%);
+    }
+    #secretForm[data-open="true"] { display: flex; }
+    body[data-top="open"] #secretForm { top: calc(62px + var(--safe-top)); }
+    #secretForm p { margin: 0; overflow-wrap: anywhere; }
+    #secretForm .warn { color: var(--warning); }
+    #secretForm .name { color: var(--text-weak); font-family: var(--font-mono); font-size: 12px; }
+    #secretForm .err { color: var(--critical); }
+    #secretInput {
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-strong);
+      font-size: 16px;
+    }
+    #secretForm .row { display: flex; justify-content: flex-end; gap: 6px; }
+    .btn-ghost {
+      height: 30px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-base);
+    }
+    .btn-ghost:hover { background: var(--surface-hover); color: var(--text-strong); }
 
     @media (max-width: 720px) {
       #topbar { flex-wrap: wrap; justify-content: center; width: calc(100vw - 16px); }
@@ -419,6 +460,18 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
     <p id="takeoverReason" data-i18n="takeoverDefaultReason">${s.takeoverDefaultReason}</p>
     <button class="btn-primary" id="resumeBtn" type="button" data-i18n="resumeBtn">${s.resumeBtn}</button>
   </div>
+
+  <form id="secretForm" class="glass" role="dialog" aria-labelledby="secretTitle" autocomplete="off">
+    <p class="warn" id="secretTitle" data-i18n="secretTitle">${s.secretTitle}</p>
+    <p id="secretReason"></p>
+    <p class="name" id="secretName"></p>
+    <input id="secretInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-placeholder="secretPlaceholder" placeholder="${s.secretPlaceholder}" />
+    <p class="err" id="secretError" hidden></p>
+    <div class="row">
+      <button class="btn-ghost" id="secretCancel" type="button" data-i18n="secretCancel">${s.secretCancel}</button>
+      <button class="btn-primary" id="secretSave" type="submit" data-i18n="secretSave" disabled>${s.secretSave}</button>
+    </div>
+  </form>
 
   <div id="dock" class="glass">
     <form id="textForm">
@@ -871,7 +924,7 @@ let screenOwner = "idle";
 
           const items = data.takeovers || [];
           const matched = targetSession ? items.find((t) => t.sessionID === targetSession) || items[0] : items[0];
-          if (matched) {
+          if (matched && secretForm.dataset.open !== "true") {
             banner.dataset.open = "true";
             reasonEl.textContent = matched.reason;
             banner.dataset.session = matched.sessionID;
@@ -886,6 +939,58 @@ let screenOwner = "idle";
           agentText.textContent = scr.tool ? t("agentOperatingTool", { tool: scr.tool }) : t("agentOperating");
         } catch {}
       }
+
+      // Separate from fetchState so an older host without the secret RPCs keeps working.
+      const secretForm = $("secretForm");
+      const secretInput = $("secretInput");
+      function showSecretError(msg) {
+        $("secretError").textContent = msg || "";
+        $("secretError").hidden = !msg;
+      }
+      function showSecret(item) {
+        if ((item ? item.id : "") === (secretForm.dataset.id || "")) return;
+        secretInput.value = "";
+        $("secretSave").disabled = true;
+        showSecretError("");
+        if (!item) {
+          secretForm.dataset.open = "false";
+          secretForm.dataset.id = "";
+          return;
+        }
+        secretForm.dataset.id = item.id;
+        $("secretReason").textContent = item.reason;
+        $("secretName").textContent = t("secretStoredAs", { name: item.name });
+        secretForm.dataset.open = "true";
+        banner.dataset.open = "false";
+        secretInput.focus();
+      }
+      async function fetchSecrets() {
+        try {
+          const res = await rpc("listSecretRequests");
+          const items = res.items || [];
+          showSecret((targetSession ? items.find((i) => i.sessionID === targetSession) : items[0]) || null);
+        } catch {}
+      }
+      secretInput.addEventListener("input", () => { $("secretSave").disabled = !secretInput.value; });
+      secretForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const id = secretForm.dataset.id;
+        if (!id || !secretInput.value) return;
+        $("secretSave").disabled = true;
+        try {
+          await rpc("secretSubmit", { id, value: secretInput.value });
+          showSecret(null);
+          setStatus(t("secretSaved"), "online");
+        } catch (e) {
+          showSecretError(e.message);
+          $("secretSave").disabled = !secretInput.value;
+        }
+      });
+      $("secretCancel").addEventListener("click", () => {
+        const id = secretForm.dataset.id;
+        showSecret(null);
+        if (id) rpc("secretCancel", { id }).catch(() => {});
+      });
 
       function stopJpegLoops() {
         if (timer) { clearInterval(timer); timer = null; }
@@ -1179,6 +1284,8 @@ let screenOwner = "idle";
         }
       });
       setInterval(fetchState, 1500);
+      fetchSecrets();
+      setInterval(fetchSecrets, 2000);
       }
 
       if (server && auth) connect();

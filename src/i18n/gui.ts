@@ -19,6 +19,13 @@ export const guiEn = {
   "screen.forceTakeoverConfirm": "Interrupt the AI agent and take over the screen?",
   "screen.inputLocked": "Locked (AI is operating)",
 
+  "secret.title": "AI needs a secret",
+  "secret.storedAs": "Saved to the Mac's Keychain as {{name}}",
+  "secret.label": "Secret",
+  "secret.placeholder": "Type it here; the AI never sees it",
+  "secret.submit": "Save",
+  "secret.cancel": "Cancel",
+
   "status.detailsTitle": "Connection details",
   "status.group.channel": "Channel",
   "status.group.video": "Video",
@@ -125,6 +132,13 @@ export const guiZh: Record<GuiMessageKey, string> = {
   "screen.forceTakeoverConfirm": "要中断 AI 并接管屏幕吗？",
   "screen.inputLocked": "已锁定（AI 操作中）",
 
+  "secret.title": "AI 需要一个密钥",
+  "secret.storedAs": "将以 {{name}} 存入 Mac 钥匙串",
+  "secret.label": "密钥",
+  "secret.placeholder": "在此输入，AI 看不到明文",
+  "secret.submit": "保存",
+  "secret.cancel": "取消",
+
   "status.detailsTitle": "连接详情",
   "status.group.channel": "通道",
   "status.group.video": "画面",
@@ -228,6 +242,13 @@ export const guiZht: Record<GuiMessageKey, string> = {
   "screen.forceTakeover": "強制接管",
   "screen.forceTakeoverConfirm": "要中斷 AI 並接管螢幕嗎？",
   "screen.inputLocked": "已鎖定（AI 操作中）",
+
+  "secret.title": "AI 需要一個密鑰",
+  "secret.storedAs": "將以 {{name}} 存入 Mac 鑰匙圈",
+  "secret.label": "密鑰",
+  "secret.placeholder": "在此輸入，AI 看不到明文",
+  "secret.submit": "儲存",
+  "secret.cancel": "取消",
 
   "status.detailsTitle": "連線詳情",
   "status.group.channel": "通道",

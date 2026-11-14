@@ -14,8 +14,9 @@ import {
 import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
 import { SCREEN_BUSY_DETAIL, ScreenLock, isGuiToolCall } from "./takeover/screen-lock.ts"
+import { SecretManager } from "./secrets.ts"
 import { consoleLink } from "./console/link.ts"
-import { ViewerRegistry } from "./takeover/viewers.ts"
+import { ViewerRegistry, type ViewerBeat } from "./takeover/viewers.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
@@ -60,6 +61,13 @@ export function containsHighRiskIntent(values: readonly string[]): string | null
   return null
 }
 
+// The keychain items written by `/usr/bin/security` are readable by any `security` call from the same user, so reads get a prompt.
+const KEYCHAIN_READ = /\b(find-generic-password|find-internet-password|dump-keychain)\b/
+
+export function readsKeychain(values: readonly string[]): boolean {
+  return KEYCHAIN_READ.test(values.join(" "))
+}
+
 const OPERATOR_SKILL_CONTENT = `# Bot macOS Operator Guide
 
 You have access to fallback \`computer_*\` tools that wrap \`agent-desktop\` / \`agent-browser\` on the **macOS server** hosting OpenCode.
@@ -73,6 +81,10 @@ When calling \`computer_request_takeover\`:
 - OpenCode Desktop automatically opens the built-in **Live Screen** side panel and displays a takeover banner with a resume button.
 - End your turn immediately after calling \`computer_request_takeover\` and briefly tell the user what to complete in **Live Screen** (or reply in chat when done).
 - Do NOT paste standalone Web Console URLs unless the user explicitly asks for an external browser/mobile link (they can run \`/bot\` anytime).
+
+When a login needs a password or other secret you do not have:
+- Call \`computer_secret_request\` with a short \`name\` and a \`reason\` naming the site/app and account. It shows an input card to the user and waits; the value goes into the macOS Keychain and you never see it.
+- Then focus the field and call \`computer_secret_type\` with the same \`name\` and the field's ref. Never ask the user to paste a secret into the chat, and never try to read the Keychain yourself.
 
 Keep actions safe, concise, and confirm after mutations.
 `
@@ -89,6 +101,7 @@ export default Plugin.define({
 
     const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
     const takeovers = new TakeoverManager(() => awake.acquire())
+    const secrets = new SecretManager(() => awake.acquire())
     const browser = new MacBrowserController(options.reuseHostBrowser)
     const routines = new RoutineScheduler(ctx, () => awake.acquire(), options.routinePollMs)
     const streamOptions = {
@@ -245,7 +258,7 @@ export default Plugin.define({
         }
       },
       viewerHeartbeat: async (rawInput) => {
-        viewers.beat(rawInput as { clientId: string; platform: "web" | "desktop"; mobile: boolean })
+        viewers.beat(rawInput as ViewerBeat)
         return { ok: true }
       },
       resolveTakeover: async (rawInput) => {
@@ -255,6 +268,16 @@ export default Plugin.define({
       },
       screenState: async () => screen.state(),
       forceTakeover: async (rawInput) => forceTakeover((rawInput as { sessionID?: string } | undefined)?.sessionID),
+      listSecretRequests: async () => {
+        return { items: secrets.list() }
+      },
+      secretSubmit: async (rawInput) => {
+        const input = rawInput as { id: string; value: string }
+        return { ok: await secrets.submit(input.id, input.value) }
+      },
+      secretCancel: async (rawInput) => {
+        return { ok: secrets.cancel({ id: (rawInput as { id: string }).id }) > 0 }
+      },
       streamOffer: async (rawInput) => {
         const { sdp } = rawInput as { sdp: string }
         if (!stream) throw new Error("Live stream helpers are not built for this platform (run npm run build:native)")
@@ -277,8 +300,8 @@ export default Plugin.define({
         reason: item.reason,
         ...(url ? { consoleUrl: url } : {}),
       })
-      // Controllers without the Live Screen panel (mobile, no plugin) get the console link in the chat itself.
-      if (url && !viewers.hasPanelViewer()) {
+      // Controllers without the Live Screen panel for this session (mobile, no plugin, on the host itself) get the console link in the chat itself.
+      if (url && viewers.needsLink(item.sessionID)) {
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
@@ -310,9 +333,40 @@ export default Plugin.define({
       }
     })
 
+    const unsubSecretReq = secrets.onRequested((item) => {
+      void rpcReg.events.emit("secretRequested", {
+        id: item.id,
+        sessionID: item.sessionID,
+        name: item.name,
+        reason: item.reason,
+      })
+      const url = consoleLink(options, item.sessionID)
+      if (url && viewers.needsLink(item.sessionID)) {
+        void ctx.session
+          .synthetic({
+            sessionID: item.sessionID as any,
+            description: tServer(locale, "secret.linkDescription"),
+            text: tServer(locale, "secret.linkText", { reason: item.reason, url }),
+            resume: false,
+          })
+          .catch(() => {})
+      }
+    })
+    const unsubSecretRes = secrets.onResolved((item, outcome) => {
+      void rpcReg.events.emit("secretResolved", { id: item.id, sessionID: item.sessionID, outcome })
+    })
+
     // 2. Permission guardrail hook: escalate high-risk GUI/Browser mutations to interactive Web approval
     const permHookReg = await ctx.permission.hook("evaluate", (event) => {
-      if (!event.action.startsWith("bot.")) return
+      if (!event.action.startsWith("bot.")) {
+        if (event.effect === "allow" && readsKeychain([...event.resources, JSON.stringify(event.metadata ?? {})])) {
+          event.effect = "ask"
+          event.message = tServer(locale, "permission.keychainRead")
+        }
+        return
+      }
+      // Secret names like "github.password" would otherwise trip the keyword check depending only on their name.
+      if (event.action === "bot.secret.type") return
       const matchedKeyword = containsHighRiskIntent([
         ...event.resources,
         JSON.stringify(event.metadata ?? {}),
@@ -326,6 +380,7 @@ export default Plugin.define({
     // 3. Prompt admission hook: if a session is waiting for Human Takeover and the user replies in chat,
     //    clear the takeover banner and attach a one-shot context hint so the model checks whether the user finished or asked a question.
     const promptHookReg = await ctx.session.hook("prompt", (event) => {
+      secrets.cancel({ sessionID: event.sessionID }, "The user replied in chat instead of entering the secret")
       const pending = takeovers.getBySession(event.sessionID)
       if (pending) {
         chatResumedTakeovers.set(event.sessionID, { id: pending.id, reason: pending.reason })
@@ -358,7 +413,7 @@ export default Plugin.define({
         const consoleState = options.consoleUrl ? "Web / mobile console link available via /bot-link." : ""
         event.system.push({
           type: "text",
-          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), and host screen/GUI fallback. Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). ${consoleState}`.trim(),
+          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), host screen/GUI fallback, and Keychain-backed secret entry (\`computer_secret_request\` then \`computer_secret_type\`; never ask for passwords in chat). Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). [Controllers] ${viewers.describe(event.sessionID)} ${consoleState}`.trim(),
         } as any)
       }
       const resumed = chatResumedTakeovers.get(event.sessionID)
@@ -404,6 +459,7 @@ export default Plugin.define({
         isMac,
         awake,
         takeovers,
+        secrets,
         viewers,
         browser,
         routines,
@@ -418,6 +474,9 @@ export default Plugin.define({
       unsubRes()
       unsubScreen()
       screen.dispose()
+      unsubSecretReq()
+      unsubSecretRes()
+      secrets.dispose()
       routines.dispose()
       stream?.dispose()
       disposeDesktopHelpers()

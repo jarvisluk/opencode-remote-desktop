@@ -7,6 +7,7 @@ import { KeepAwakeController } from "../src/macos/awake.ts"
 import { buildMacOSPath, resolveBinary } from "../src/macos/exec.ts"
 import { getMacDesktopStatus } from "../src/macos/desktop.ts"
 import { registerBotTools } from "../src/tools.ts"
+import { SecretManager } from "../src/secrets.ts"
 
 test("options resolver applies sensible defaults", () => {
   const opts = resolveOptions(undefined)
@@ -164,6 +165,7 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
     isMac: true,
     awake: { isHeld: () => false } as any,
     takeovers: manager,
+    secrets: new SecretManager(() => () => {}),
     browser: { inspect: async () => ({ mode: "cdp" }), run: async () => ({ ok: true }) } as any,
     routines: { list: () => [] } as any,
     permissionAssert: async () => {},
@@ -233,10 +235,23 @@ test("console link carries server and session but no credentials; viewer registr
   assert.equal(detectTunnelUrl(env), "https://abc.h.opentunnel.xyz")
 
   const v = new ViewerRegistry()
-  assert.equal(v.isUnknown(), true)
-  v.beat({ clientId: "m", platform: "web", mobile: true })
-  assert.equal(v.hasPanelViewer(), false)
-  v.beat({ clientId: "d", platform: "desktop", mobile: false })
-  assert.equal(v.hasPanelViewer(), true)
-  assert.equal(v.hasPanelViewer(Date.now() + 60_000), false)
+  assert.equal(v.needsLink("s1"), true)
+  v.beat({ clientId: "m", platform: "web", mobile: true, sessionID: "s1", panel: true })
+  assert.equal(v.hasPanelViewer("s1"), true, "mobile web shows Live Screen as a mobile tab")
+  assert.equal(v.needsLink("s1"), false)
+  v.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
+  assert.equal(v.needsLink("s1"), true, "the desktop app on the host still needs the link")
+  assert.equal(v.hasPanelViewer("s1", Date.now() + 60_000), false)
+
+  // A desktop app watching another session must not hide this one from a web user.
+  const w = new ViewerRegistry()
+  assert.match(w.describe("s1"), /web\/mobile/)
+  w.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "other", panel: true })
+  w.beat({ clientId: "w", platform: "web", mobile: false, sessionID: "s1", panel: false })
+  assert.equal(w.hasPanelViewer("s1"), false)
+  assert.equal(w.needsLink("s1"), true)
+  assert.equal(w.hasDesktopWithoutPanel("s1"), false)
+  assert.match(w.describe("s1"), /web — no Live Screen panel/)
+  w.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
+  assert.equal(w.hasDesktopWithoutPanel("s1"), true)
 })
