@@ -200,7 +200,13 @@ npm trust github opencode-remote-desktop \
   --file publish.yml --allow-publish
 ```
 
-The same can be done on npmjs.com under the package's Trusted publishing settings (publisher GitHub Actions, repository `jarvisluk/opencode-remote-desktop`, workflow `publish.yml`). After that, pushing a tag is the whole release.
+A release that is already on npm is skipped, so tagging an existing version still produces a green run; pair each tag with a GitHub Release for the changelog:
+
+```bash
+gh release create v0.2.0 --generate-notes
+```
+
+The same trusted publisher setup can be done on npmjs.com under the package's Trusted publishing settings (publisher GitHub Actions, repository `jarvisluk/opencode-remote-desktop`, workflow `publish.yml`). After that, pushing a tag is the whole release.
 
 ## License
 
@@ -392,6 +398,12 @@ workflow 会在 macOS runner 上跑 typecheck、测试、编译原生 sidecar，
 npm trust github opencode-remote-desktop \
   --repo jarvisluk/opencode-remote-desktop \
   --file publish.yml --allow-publish
+```
+
+已经发过的版本会被自动跳过，所以给旧版本补 tag 也能跑绿；每个 tag 建议配一个 GitHub Release 记录变更：
+
+```bash
+gh release create v0.2.0 --generate-notes
 ```
 
 也可以在 npmjs.com 的包设置 → Trusted publishing 里添加（Publisher: GitHub Actions，Repository: `jarvisluk/opencode-remote-desktop`，Workflow: `publish.yml`）。之后每次发版只要推 tag。
