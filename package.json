@@ -1,5 +1,5 @@
 {
-  "name": "opencode-bot-host",
+  "name": "opendot",
   "version": "0.1.0",
   "description": "A macOS host for OpenCode: real desktop and signed-in browser control, live human takeover from any browser, and 24/7 routines.",
   "keywords": [
@@ -51,5 +51,13 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jarvisluk/opendot.git"
+  },
+  "homepage": "https://github.com/jarvisluk/opendot#readme",
+  "bugs": {
+    "url": "https://github.com/jarvisluk/opendot/issues"
   }
 }
