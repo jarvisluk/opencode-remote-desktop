@@ -236,8 +236,89 @@ export const BotRpc = Rpc.define({
         additionalProperties: false,
       },
     },
+    listSecretRequests: {
+      input: { type: "object", additionalProperties: false },
+      output: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                sessionID: { type: "string" },
+                name: { type: "string" },
+                reason: { type: "string" },
+                createdAt: { type: "number" },
+              },
+              required: ["id", "sessionID", "name", "reason", "createdAt"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["items"],
+        additionalProperties: false,
+      },
+    },
+    secretSubmit: {
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          value: { type: "string" },
+        },
+        required: ["id", "value"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
+    secretCancel: {
+      input: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
   },
   events: {
+    secretRequested: {
+      schema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          sessionID: { type: "string" },
+          name: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["id", "sessionID", "name", "reason"],
+        additionalProperties: false,
+      },
+    },
+    secretResolved: {
+      schema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          sessionID: { type: "string" },
+          outcome: { type: "string", enum: ["saved", "cancelled"] },
+        },
+        required: ["id", "sessionID", "outcome"],
+        additionalProperties: false,
+      },
+    },
     takeoverRequested: {
       schema: {
         type: "object",

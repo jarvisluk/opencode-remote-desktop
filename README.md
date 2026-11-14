@@ -83,6 +83,8 @@
 - `computer_browser`: 操作宿主机 Edge/Chrome 浏览器（`open`、`snapshot`、`click`、`type`、`eval`）。
 - `computer_request_takeover`: 请求人类接管屏幕并挂起当前会话，返回接管链接并在侧边栏高亮提示。
 - `computer_routine`: 管理全天候例行任务（`list`、`add`、`remove`）。
+- `computer_secret_request`: 在 Live Screen / 网页控制台弹出密钥输入卡片并等待提交，值直接存入 macOS 钥匙串（服务名 `opencode-bot`），不会返回给 Agent。
+- `computer_secret_type`: 把已存的密钥输入到桌面元素（`agent-desktop type`），只返回成功或失败。已知限制：钥匙串条目由 `/usr/bin/security` 写入，同一用户的 `security find-generic-password` 可直接读出，插件只能让这类 shell 命令弹出确认；输入时密码会短暂出现在 `agent-desktop` 的进程参数里。
 
 ### 斜杠命令 (Slash Commands)
 - `/screen`: 切换/打开侧边栏实时远程屏幕（Live Screen Tab）。

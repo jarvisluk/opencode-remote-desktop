@@ -14,6 +14,13 @@ export const guiEn = {
   "takeover.cardPrefix": "Human takeover: {{reason}}",
   "takeover.cardResume": "Done & Resume AI",
 
+  "secret.title": "AI needs a secret",
+  "secret.storedAs": "Saved to the Mac's Keychain as {{name}}",
+  "secret.label": "Secret",
+  "secret.placeholder": "Type it here; the AI never sees it",
+  "secret.submit": "Save",
+  "secret.cancel": "Cancel",
+
   "status.detailsTitle": "Connection details",
   "status.group.channel": "Channel",
   "status.group.video": "Video",
@@ -115,6 +122,13 @@ export const guiZh: Record<GuiMessageKey, string> = {
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成并恢复 AI",
 
+  "secret.title": "AI 需要一个密钥",
+  "secret.storedAs": "将以 {{name}} 存入 Mac 钥匙串",
+  "secret.label": "密钥",
+  "secret.placeholder": "在此输入，AI 看不到明文",
+  "secret.submit": "保存",
+  "secret.cancel": "取消",
+
   "status.detailsTitle": "连接详情",
   "status.group.channel": "通道",
   "status.group.video": "画面",
@@ -213,6 +227,13 @@ export const guiZht: Record<GuiMessageKey, string> = {
   "takeover.toastResume": "已完成，恢復 AI",
   "takeover.cardPrefix": "人工接管：{{reason}}",
   "takeover.cardResume": "完成並恢復 AI",
+
+  "secret.title": "AI 需要一個密鑰",
+  "secret.storedAs": "將以 {{name}} 存入 Mac 鑰匙圈",
+  "secret.label": "密鑰",
+  "secret.placeholder": "在此輸入，AI 看不到明文",
+  "secret.submit": "儲存",
+  "secret.cancel": "取消",
 
   "status.detailsTitle": "連線詳情",
   "status.group.channel": "通道",
