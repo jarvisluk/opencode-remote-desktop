@@ -2,17 +2,220 @@
 
 [![npm](https://img.shields.io/npm/v/opencode-remote-desktop.svg)](https://www.npmjs.com/package/opencode-remote-desktop) [![license](https://img.shields.io/npm/l/opencode-remote-desktop.svg)](LICENSE) [![node](https://img.shields.io/node/v/opencode-remote-desktop.svg)](https://nodejs.org)
 
+An always-on Mac that OpenCode can drive, and that you can take over at any moment.
+
+When OpenCode runs as a server on your Mac (mini, Studio or laptop), this plugin lets the agent work on **that machine**: it reuses the browser you are already signed in to, drives real desktop apps through the macOS accessibility tree, and keeps running routine work 24/7 even when no client is connected. When something needs a human (2FA, a QR login, Face ID, a payment password), the agent suspends itself, hands the screen and keyboard back to **you**, and picks up again once you press resume.
+
+- Requirements: a macOS 13+ host, OpenCode 2.2.7+
+- Distribution: an OpenCode plugin — add its name to `plugins` in `opencode.json`
+
+---
+
+## Features
+
+**Desktop automation** — locates elements through the macOS accessibility tree instead of guessing coordinates; input goes through AppleScript / CGEvent / clipboard writes and works with any input method.
+
+**Signed-in browser reuse** — attaches to a running Edge or Chrome on the host by reading its CDP port from `DevToolsActivePort`, so cookies, accounts and extensions are already there.
+
+**Human takeover** — the agent calls `computer_request_takeover`; the session suspends and the live screen appears in the desktop app's side panel or in the web console on any device. When you are done, one click hands control back.
+
+**24/7 keep-awake and routines** — `caffeinate` holds the Mac awake while the agent works or waits for you, and releases it afterwards; a built-in scheduler dispatches sessions on Cron or interval.
+
+**One RPC surface** — everything goes through `BotRpc` (`POST <server>/api/rpc/bot/<method>`), so the desktop panel and the web console share one protocol that reuses the server's own password auth and remote tunnel. The plugin never opens a port of its own.
+
+---
+
+## Architecture
+
+```text
+┌────────────────────────────────────────────────────────┐
+│     OpenCode desktop app / web / mobile clients        │
+│   chat session + Live Screen panel / web console       │
+└──────────────────────────┬─────────────────────────────┘
+                           │ HTTP / RPC / WebSocket
+┌──────────────────────────▼─────────────────────────────┐
+│              OpenCode Server (macOS host)              │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │ opencode-remote-desktop                          │  │
+│  │  TakeoverManager  suspend / resume state machine │  │
+│  │  ScreenLock       who owns the screen (AI / you) │  │
+│  │  BotRpc           the only channel for clients   │  │
+│  │  RoutineScheduler 24/7 timers                    │  │
+│  │  KeepAwake        caffeinate                     │  │
+│  └───────────────┬───────────────────┬──────────────┘  │
+│  ┌───────────────▼────────┐ ┌────────▼──────────────┐  │
+│  │ agent-desktop          │ │ CDP / agent-browser   │  │
+│  │ accessibility + CGEvent│ │ attach to Edge/Chrome │  │
+│  └────────────────────────┘ └───────────────────────┘  │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Install
+
+### 1. Host dependencies
+
+```bash
+npm install -g agent-desktop agent-browser
+agent-browser install                      # fetches Chrome for Testing on first run
+agent-desktop permissions --guide          # grants Accessibility and Screen Recording
+```
+
+Then run `/doctor` inside OpenCode: it checks CLI versions, TCC permissions, the native streaming sidecars and the browser mode, and prints the command to fix whatever is missing.
+
+The low latency WebRTC stream needs native sidecars; without them the plugin falls back to JPEG polling:
+
+```bash
+npm run build:native     # needs Go and swiftc
+```
+
+Published builds ship `darwin-arm64` binaries. On other architectures compile them locally from `native/`.
+
+### 2. Register the plugin
+
+```json
+{
+  "plugins": [
+    {
+      "source": "opencode-remote-desktop",
+      "options": {
+        "consoleUrl": "https://bot-console.pages.dev",
+        "keepAwake": "active",
+        "reuseHostBrowser": true,
+        "maxImageDimension": 1440,
+        "jpegQuality": 72
+      }
+    }
+  ]
+}
+```
+
+On a controller that should only show the side panel, without registering the `computer_*` tools or the takeover console, pass `"host": false`.
+
+### 3. Let phones and browsers take over
+
+```bash
+opencode service set remote true                                  # enable the remote tunnel
+opencode service set cors https://bot-console.pages.dev           # allow the console origin
+```
+
+The console is a static page already deployed on Cloudflare Pages; you can also build and deploy your own:
+
+```bash
+npm run build:pages
+npx wrangler pages deploy pages --project-name bot-console
+```
+
+---
+
+## Tools and commands
+
+### Tools
+
+| Tool | What it does |
+| --- | --- |
+| `computer_status` | host OS, resolution, Accessibility grant, console state |
+| `computer_screenshot` | captures the screen or one window as compressed JPEG plus logical coordinates |
+| `computer_desktop` | native actions: `snapshot`, `click`, `type`, `press`, `scroll` |
+| `computer_browser` | drives the host Edge/Chrome: `open`, `snapshot`, `click`, `type`, `eval` |
+| `computer_request_takeover` | suspends the session and hands the screen to a human |
+| `computer_routine` | routine jobs: `list`, `add`, `remove` |
+| `computer_secret_request` | shows a secret card; the value goes straight to the macOS keychain and never back to the agent |
+| `computer_secret_type` | types a stored secret into a desktop element, reporting only success or failure |
+
+### Slash commands
+
+| Command | What it does |
+| --- | --- |
+| `/screen` | opens or toggles the Live Screen side panel |
+| `/bot-link` | prints the web console link (no credentials, safe to paste into a session) |
+| `/bot` | shows status and the console entry point |
+| `/takeover` | suspends the session and requests a takeover manually |
+| `/routine` | lists or manages routine jobs |
+| `/doctor` | checks the host dependencies |
+
+### Where the Live Screen panel shows up
+
+- **Desktop app connected to a remote server**: side panel available through `Cmd+Shift+S`, `/screen` or the `+` menu.
+- **Web clients, phones, TUI, controllers without the plugin**: OpenCode only loads plugin UI in the desktop app, so these use the web console from `/bot-link`.
+- When the controller has no panel — judged from a heartbeat the desktop panel sends every 15 seconds — the console link is added to the tool result and the agent pastes it into its reply.
+
+### Screen lock
+
+While the agent is driving the screen (it used a desktop or browser tool, plus a 20 second grace window), remote input is rejected with `agent-busy` so nobody clicks into the middle of an operation. Both the panel and the web console offer **Force takeover**, which interrupts the agent and gives you the screen.
+
+---
+
+## Web console
+
+`https://bot-console.pages.dev/#server=<server>&session=<session>`
+
+- Everything after `#` stays in the browser and is never sent to the page host.
+- The first visit asks for the OpenCode server password; later visits read it from localStorage.
+- The server address defaults to the OpenCode remote tunnel; the `serverUrl` option overrides it, `consoleUrl` changes the page address and setting it to `""` disables links.
+
+---
+
+## Security
+
+- Every RPC call goes through the OpenCode server's own password auth; the plugin opens no ports.
+- Console links carry a server address and a session ID, never credentials.
+- The console origin must be in the server's `cors` allowlist or requests are rejected.
+- Secrets live only in the macOS keychain (service `opencode-bot`) and never pass through the agent.
+- Known limit: entries are written through `/usr/bin/security`, so the same user can read them back with `security find-generic-password`; the plugin can only make those shell commands prompt. While typing, the value is briefly visible in the `agent-desktop` process arguments.
+
+## Limitations
+
+- Only a macOS host can control a desktop; Linux and Windows have no capture backend yet and fall back to JPEG polling.
+- Accessibility and Screen Recording must be granted in System Settings, otherwise `/doctor` reports the gap.
+- The Live Screen panel needs the desktop app plus a remote server; web and mobile use the web console.
+
+---
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test          # 49 unit tests
+npm run build     # builds dist/gui-experimental.cjs
+```
+
+## Publishing
+
+Releases go through GitHub Actions trusted publishing (OIDC + provenance), so no npm token lives on a machine:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0   # or run the workflow manually
+```
+
+The workflow runs typecheck, tests and the native sidecar build on a macOS runner, then `npm publish --provenance`; a tag that disagrees with `package.json` fails the run.
+
+Authorize the workflow once as a trusted publisher:
+
+```bash
+npm trust github opencode-remote-desktop \
+  --repo jarvisluk/opencode-remote-desktop \
+  --file publish.yml --allow-publish
+```
+
+The same can be done on npmjs.com under the package's Trusted publishing settings (publisher GitHub Actions, repository `jarvisluk/opencode-remote-desktop`, workflow `publish.yml`). After that, pushing a tag is the whole release.
+
+## License
+
+MIT
+
+---
+
+# 中文文档
 
 让 OpenCode 拥有一台**永远在线、AI 可驾驶、人可随时接管的真实 Mac**。
-
-`opencode-remote-desktop` 是 OpenCode 的 macOS 宿主机插件：远程看到并操作那台 Mac，需要时把键鼠交还给人。
 
 OpenCode 以服务端形式跑在你的 macOS 机器（Mac mini / Mac Studio / MacBook）上时，这个插件让 Agent 直接操控**这台你自己的电脑**：复用本机已登录的浏览器与账号，通过 macOS 无障碍树操作真实桌面应用，客户端断开也能 7×24 常驻执行例行任务。遇到只有人才能过的关卡（2FA、扫码登录、人脸识别、支付密码），AI 主动挂起，把屏幕与键鼠**交还给你**——在浏览器或手机上操作完，一键把控制权还给 AI。
 
 - 运行环境：macOS 13+ 的宿主机 + OpenCode 2.2.7+
 - 打包形态：OpenCode 插件（`opencode.json` 的 `plugins` 里写插件名即可）
-
----
 
 ## 特性
 
@@ -25,8 +228,6 @@ OpenCode 以服务端形式跑在你的 macOS 机器（Mac mini / Mac Studio / M
 **24/7 防休眠与例行任务**：任务执行与等待接管期间用 `caffeinate` 保持清醒，结束后自动释放；内置例行任务调度器，按 Cron 或间隔周期自动派发会话。
 
 **统一 RPC**：所有能力都走 `BotRpc`（`POST <server>/api/rpc/bot/<method>`），桌面面板与 Web 控制台用同一套协议，复用 OpenCode 服务自带的密码认证与远程访问隧道，插件不开自己的端口。
-
----
 
 ## 架构
 
@@ -53,8 +254,6 @@ OpenCode 以服务端形式跑在你的 macOS 机器（Mac mini / Mac Studio / M
 └────────────────────────────────────────────────────────┘
 ```
 
----
-
 ## 安装
 
 ### 1. 宿主机依赖
@@ -76,8 +275,6 @@ npm run build:native     # 需要 Go 与 swiftc
 已发布的包内置 `darwin-arm64` 的可执行文件；其他架构请在本机编译（源码在 `native/`）。
 
 ### 2. 注册插件
-
-在 `~/.config/opencode/opencode.json` 里加上插件：
 
 ```json
 {
@@ -111,8 +308,6 @@ opencode service set cors https://bot-console.pages.dev           # 允许控制
 npm run build:pages
 npx wrangler pages deploy pages --project-name bot-console
 ```
-
----
 
 ## 工具与命令
 
@@ -148,9 +343,7 @@ npx wrangler pages deploy pages --project-name bot-console
 
 ### 屏幕锁
 
-Agent 正在操作屏幕时（用过桌面/浏览器工具，含其后 20 秒宽限），远程输入会被拒绝并返回 `agent-busy`，避免人在 AI 操作中途误触。面板与 Web 控制台都会有「强制接管」按钮：中断 AI 并把屏幕交给人。
-
----
+Agent 正在操作屏幕时（用过桌面/浏览器工具，含其后 20 秒宽限），远程输入会被拒绝并返回 `agent-busy`，避免人在 AI 操作中途误触。面板与 Web 控制台都有「强制接管」按钮：中断 AI 并把屏幕交给人。
 
 ## Web 控制台
 
@@ -159,8 +352,6 @@ Agent 正在操作屏幕时（用过桌面/浏览器工具，含其后 20 秒宽
 - 参数放在 `#` 之后，不会发送给页面服务器。
 - 首次打开输入 OpenCode 服务器密码，之后存在该浏览器的 localStorage。
 - 服务器地址默认取 OpenCode 远程隧道，也可以用插件选项 `serverUrl` 指定；`consoleUrl` 改页面地址，设为 `""` 关闭链接。
-
----
 
 ## 安全
 
@@ -176,8 +367,6 @@ Agent 正在操作屏幕时（用过桌面/浏览器工具，含其后 20 秒宽
 - 首次使用需要在「系统设置 → 隐私与安全性」里授予辅助功能与屏幕录制权限，否则 `/doctor` 会报错。
 - Live Screen 面板仅桌面 App + 远端服务可见；web/手机只能走控制台。
 
----
-
 ## 开发
 
 ```bash
@@ -186,8 +375,6 @@ npm run typecheck
 npm test          # 49 项单元测试
 npm run build     # 构建 dist/gui-experimental.cjs
 ```
-
----
 
 ## 发布
 
