@@ -315,17 +315,20 @@ export function registerBotTools(
         app: input.app,
       })
 
-      // No heartbeat at all means the controller has no bot GUI plugin: hand the agent the console link for its own side browser.
-      const sideUrl = viewers?.isUnknown() ? consoleLink(options, item.sessionID) : undefined
+      // The in-app browser belongs to the desktop app, so only hand it the link when a desktop app showing this session has no panel.
+      const sideUrl = viewers?.hasDesktopWithoutPanel(item.sessionID) ? consoleLink(options, item.sessionID) : undefined
 
       return {
         content: [
           `Human takeover requested (${item.id}): "${input.reason}".`,
-          `- Built-in Live Screen panel and takeover banner have been triggered automatically for this session.`,
-          `- If the user's client has no Live Screen panel (mobile, web without the plugin), a console link was already posted into the chat; do not repeat it.`,
+          ...(viewers ? [`- Controllers: ${viewers.describe(item.sessionID)}`] : []),
+          viewers?.hasPanelViewer(item.sessionID)
+            ? `- The Live Screen panel and takeover banner were opened in the controller(s) that have one.`
+            : `- No controller has a Live Screen panel for this session.`,
+          `- Any controller without a Live Screen panel already got a console link in the chat; do not repeat it.`,
           ...(sideUrl
-            ? [`- The user's client appears to have no Live Screen panel. If you have a side/in-app browser tool (e.g. browser.tabs.open), open this URL once so the user can take over (the page asks for the server password); never print it in your reply: ${sideUrl}`]
-            : []),
+            ? [`- The desktop app showing this session has no Live Screen panel. If you have its in-app browser tool (e.g. browser.tabs.open), open this URL once so the user can take over (the page asks for the server password); never print it in your reply: ${sideUrl}`]
+            : [`- Do not open the console in an in-app browser tool: that pane exists only in the desktop app (never on web or mobile web), so it would not show where the user is.`]),
           `- Stop calling computer_* tools and end your response NOW with a concise message telling the user what to complete in Live Screen, and to click the resume button (or reply in chat) when done.`,
           `- Do NOT paste standalone Web Console URLs unless the user is on mobile/external browser without Live Screen or asks for a link (they can run /bot-link anytime).`,
         ].join("\n"),

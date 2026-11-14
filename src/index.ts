@@ -15,7 +15,7 @@ import { MacBrowserController } from "./macos/browser.ts"
 import { TakeoverManager } from "./takeover/manager.ts"
 import { SecretManager } from "./secrets.ts"
 import { consoleLink } from "./console/link.ts"
-import { ViewerRegistry } from "./takeover/viewers.ts"
+import { ViewerRegistry, type ViewerBeat } from "./takeover/viewers.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { RoutineScheduler } from "./routines/scheduler.ts"
 import { collectBotStatus } from "./status.ts"
@@ -235,7 +235,7 @@ export default Plugin.define({
         }
       },
       viewerHeartbeat: async (rawInput) => {
-        viewers.beat(rawInput as { clientId: string; platform: "web" | "desktop"; mobile: boolean })
+        viewers.beat(rawInput as ViewerBeat)
         return { ok: true }
       },
       resolveTakeover: async (rawInput) => {
@@ -275,8 +275,8 @@ export default Plugin.define({
         reason: item.reason,
         ...(url ? { consoleUrl: url } : {}),
       })
-      // Controllers without the Live Screen panel (mobile, no plugin) get the console link in the chat itself.
-      if (url && !viewers.hasPanelViewer()) {
+      // Controllers without the Live Screen panel for this session (mobile, no plugin, on the host itself) get the console link in the chat itself.
+      if (url && viewers.needsLink(item.sessionID)) {
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
@@ -316,7 +316,7 @@ export default Plugin.define({
         reason: item.reason,
       })
       const url = consoleLink(options, item.sessionID)
-      if (url && !viewers.hasPanelViewer()) {
+      if (url && viewers.needsLink(item.sessionID)) {
         void ctx.session
           .synthetic({
             sessionID: item.sessionID as any,
@@ -369,7 +369,7 @@ export default Plugin.define({
         const consoleState = options.consoleUrl ? "Web / mobile console link available via /bot-link." : ""
         event.system.push({
           type: "text",
-          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), host screen/GUI fallback, and Keychain-backed secret entry (\`computer_secret_request\` then \`computer_secret_type\`; never ask for passwords in chat). Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). ${consoleState}`.trim(),
+          text: `[Bot macOS Host Active] Fallback host tools (\`computer_*\` inside \`execute\` as \`tools.computer.*\`) are available for remote takeover (\`computer_request_takeover\`), 24/7 routines (\`computer_routine\`), host screen/GUI fallback, and Keychain-backed secret entry (\`computer_secret_request\` then \`computer_secret_type\`; never ask for passwords in chat). Prefer dedicated browser/desktop tools or skills (\`browser\`, \`browse\`, \`agent-desktop\`, \`agent-browser\`) over \`computer_desktop\` / \`computer_browser\` whenever available. Calling \`computer_request_takeover\` automatically opens the built-in Live Screen panel with a resume button and yields the turn—explain what the user should do and do not paste raw Web Console URLs unless asked (when the controller has no Live Screen panel, a console link is posted to the chat automatically). [Controllers] ${viewers.describe(event.sessionID)} ${consoleState}`.trim(),
         } as any)
       }
       const resumed = chatResumedTakeovers.get(event.sessionID)

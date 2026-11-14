@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/gui"
 import { Command, MenuItem, Panel } from "@opencode/plugin/gui"
 import type { MountedSession, PanelProps, PanelTab, ServerRef, ToastHandle, Ui } from "@opencode/plugin/gui"
-import { createSignal, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { createSignal, createMemo, onMount, onCleanup, createEffect, untrack } from "solid-js"
 import type { JSX } from "solid-js"
 import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
@@ -435,13 +435,16 @@ export default Plugin.define({
     const PANEL_ID = "screen"
     const TAB_KEY = `${ctx.id}:${PANEL_ID}`
     // Live Screen only makes sense when the app drives another machine (e.g. over OpenTunnel), not its own desktop.
-    const remote = (session?: { server: ServerRef }) => session?.server.local === false
+    // On the web the "local" server is the one serving the page, which is the host itself, seen from another device.
+    const remote = (session?: { server: ServerRef }) =>
+      !!session && (session.server.local === false || ctx.app.platform === "web")
 
     // Reactive map of active takeovers across connected servers, keyed by `${serverId}\n${sessionID}` (SessionRef.key).
     const [takeoversBySession, setTakeoversBySession] = createSignal<Record<string, { id: string; reason: string }>>({})
     const activeToasts = new Map<string, ToastHandle>()
     const autoOpenedTakeovers = new Set<string>()
     const watchedServers = new Map<string, () => void>()
+    const beaters = new Set<() => void>()
 
     const makeSessionKey = (serverId: string, sessionID: string) => `${serverId}\n${sessionID}`
 
@@ -539,13 +542,23 @@ export default Plugin.define({
       }
       void syncInitial()
 
-      // Tell the host this controller has the Live Screen panel, so it skips posting a link into the chat.
-      const beat = () =>
+      // Tell the host which of its sessions this controller shows and whether Live Screen can open there, so it knows when to post a link.
+      const beat = () => {
+        const cur = ctx.sessions.current()
+        const mine = cur?.server.id === server.id ? cur : undefined
         void rpc
-          .viewerHeartbeat({ clientId: CLIENT_ID, platform: ctx.app.platform, mobile: isNarrow() })
+          .viewerHeartbeat({
+            clientId: CLIENT_ID,
+            platform: ctx.app.platform,
+            mobile: isNarrow(),
+            ...(mine ? { sessionID: mine.id } : {}),
+            panel: remote(mine),
+          })
           .catch(() => {})
+      }
       beat()
       const beatTimer = setInterval(beat, 15_000)
+      beaters.add(beat)
 
       const unsubReq = rpc.events.on("takeoverRequested", (ev) => {
         if (disposed) return
@@ -578,6 +591,7 @@ export default Plugin.define({
       watchedServers.set(server.id, () => {
         disposed = true
         clearInterval(beatTimer)
+        beaters.delete(beat)
         unsubReq()
         unsubRes()
         unsubSecret()
@@ -616,6 +630,14 @@ export default Plugin.define({
       for (const existingId of [...watchedServers.keys()]) {
         if (!activeIds.has(existingId)) detachServer(existingId)
       }
+    })
+
+    // Switching sessions changes what this controller is watching; report it right away instead of on the next tick.
+    createEffect(() => {
+      ctx.sessions.current()
+      untrack(() => {
+        for (const b of beaters) b()
+      })
     })
 
     // If a session with a pending takeover is opened or focused after the event arrived, open Live Screen once for it.

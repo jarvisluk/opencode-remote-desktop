@@ -207,8 +207,10 @@ export const BotRpc = Rpc.define({
           clientId: { type: "string" },
           platform: { type: "string", enum: ["web", "desktop"] },
           mobile: { type: "boolean" },
+          sessionID: { type: "string" },
+          panel: { type: "boolean" },
         },
-        required: ["clientId", "platform", "mobile"],
+        required: ["clientId", "platform", "mobile", "panel"],
         additionalProperties: false,
       },
       output: {

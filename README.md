@@ -64,7 +64,7 @@
 ### 原生侧边栏标签页 (Native Side Panel)
 - **实时屏幕侧边栏 (Live Screen Tab)**:
   - 侧边栏支持直接打开 Live Screen Tab（`region: "side"`）。
-  - 仅在 App 连接远端服务（如 OpenTunnel、局域网/Tailscale 地址）时出现；连本机服务时面板、`+` 菜单项和 `/screen` 都会隐藏。
+  - 仅在 App 连接远端服务（如 OpenTunnel、局域网/Tailscale 地址）时出现；桌面 App 连本机服务时面板、`+` 菜单项和 `/screen` 都会隐藏。Web 端（含手机浏览器）总会显示，手机上以底部标签页呈现。
   - OpenCode Desktop 只加载**本机**服务上插件的界面，所以控制端也要装本插件，并设 `"host": false`：只提供侧边栏，不注册 `computer_*` 工具、不开接管控制台：
     ```json
     "plugins": [{ "package": "/path/to/opencode-bot", "options": { "host": false } }]
