@@ -8,7 +8,7 @@ import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -272,6 +272,7 @@ export function LiveScreenView(props: {
 
   const server = () => curSession()?.server
   const fill = windowFill(() => rootRef)
+  const secret = secretPrompt(ui, { rpc: getClientRpc, sessionID: () => curSession()?.id, t })
   const errorText = () => {
     const err = error()
     if (!err) return ""
@@ -395,10 +396,10 @@ export function LiveScreenView(props: {
         { title: () => t("status.group.input"), rows: [{ label: () => t("status.row.pointerKeyboard"), value: () => t("jpeg.inputValue") }] },
       ]),
     }),
-    () => activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
+    () => (secret.pending() ? secret.card() : activeTakeoverReason() ? takeoverCard(ui, activeTakeoverReason, () => void resumeAI(), {
       text: () => t("takeover.cardPrefix", { reason: activeTakeoverReason() }),
       resume: () => t("takeover.cardResume"),
-    }) : null,
+    }) : null),
     h("div", { style: floating("bottom-right", { display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: T.sp(1), padding: T.sp(1) }) }, [
       () => typing() ? h("div", { style: { width: "280px", "max-width": "100%" } }, h(ui.TextInput, {
         label: (() => t("jpeg.textLabel")) as any,
@@ -557,11 +558,29 @@ export default Plugin.define({
         clearTakeoverEntry(server.id, data.sessionID)
       })
 
+      // The card itself is polled by the open view; the event only brings Live Screen up and notifies the user.
+      const unsubSecret = rpc.events.on("secretRequested", (ev) => {
+        if (disposed) return
+        const data = ev.data as { id: string; sessionID: string; reason: string }
+        const targetSession = ctx.sessions.list().find((s) => s.server.id === server.id && s.id === data.sessionID)
+        if (targetSession && remote(targetSession)) ctx.layout.open(TAB_KEY, targetSession, { tab: "open" })
+        void ctx.attention
+          .notify({
+            id: data.id,
+            title: ctx.t("secret.title"),
+            message: data.reason,
+            variant: "default",
+            session: { server: server.id, id: data.sessionID },
+          })
+          .catch(() => {})
+      })
+
       watchedServers.set(server.id, () => {
         disposed = true
         clearInterval(beatTimer)
         unsubReq()
         unsubRes()
+        unsubSecret()
       })
     }
 

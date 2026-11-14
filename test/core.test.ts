@@ -7,6 +7,7 @@ import { KeepAwakeController } from "../src/macos/awake.ts"
 import { buildMacOSPath, resolveBinary } from "../src/macos/exec.ts"
 import { getMacDesktopStatus } from "../src/macos/desktop.ts"
 import { registerBotTools } from "../src/tools.ts"
+import { SecretManager } from "../src/secrets.ts"
 
 test("options resolver applies sensible defaults", () => {
   const opts = resolveOptions(undefined)
@@ -164,6 +165,7 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
     isMac: true,
     awake: { isHeld: () => false } as any,
     takeovers: manager,
+    secrets: new SecretManager(() => () => {}),
     browser: { inspect: async () => ({ mode: "cdp" }), run: async () => ({ ok: true }) } as any,
     routines: { list: () => [] } as any,
     permissionAssert: async () => {},
