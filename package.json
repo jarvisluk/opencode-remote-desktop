@@ -16,6 +16,7 @@
     "build": "node scripts/build-gui.js",
     "build:native": "node scripts/build-native.js",
     "dev": "node scripts/dev.js",
+    "install:macbook": "sh scripts/install-macbook.sh",
     "harness": "node test/stream-harness.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
