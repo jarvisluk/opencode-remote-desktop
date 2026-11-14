@@ -461,6 +461,13 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       const username = params.get("user") || "opencode";
       let server = (params.get("server") || localStorage.getItem("bot-console:server") || "").replace(/\\/+$/, "");
       let auth = server ? localStorage.getItem("bot-console:auth:" + server) || "" : "";
+      // A pairing link (/bot-link) carries the connection key as base64(user:password); keep it and wipe it from the address bar.
+      if (params.get("auth") && server) {
+        auth = "Basic " + params.get("auth");
+        localStorage.setItem("bot-console:server", server);
+        localStorage.setItem("bot-console:auth:" + server, auth);
+        history.replaceState(null, "", location.pathname + "#" + new URLSearchParams({ server, ...(targetSession ? { session: targetSession } : {}) }));
+      }
 
       function normalizeLang(raw) {
         if (!raw) return null;

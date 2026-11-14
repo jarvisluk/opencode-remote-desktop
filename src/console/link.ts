@@ -20,10 +20,18 @@ export function detectTunnelUrl(env: NodeJS.ProcessEnv = process.env): string | 
   return typeof route === "string" && typeof hostname === "string" ? `https://${route}.${hostname}` : undefined
 }
 
-/** Link to the static console page; it carries no credentials, the server password is entered in the page. */
-export function consoleLink(options: BotOptions, sessionID?: string): string | undefined {
+/** The OpenCode server connection key (base64 of user:password) from service.json, for pairing links. */
+function connectionKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const config = env.XDG_CONFIG_HOME || join(homedir(), ".config")
+  const password = readJson(join(config, "opencode", "service.json"))?.password
+  return typeof password === "string" && password ? Buffer.from(`opencode:${password}`).toString("base64") : undefined
+}
+
+/** Link to the static console page. Without `pair` it carries no credentials; with it, the connection key rides in the fragment. */
+export function consoleLink(options: BotOptions, sessionID?: string, pair = false): string | undefined {
   const server = options.serverUrl ?? detectTunnelUrl()
   if (!options.consoleUrl || !server) return undefined
-  const hash = new URLSearchParams({ server, ...(sessionID ? { session: sessionID } : {}) })
+  const auth = pair ? connectionKey() : undefined
+  const hash = new URLSearchParams({ server, ...(sessionID ? { session: sessionID } : {}), ...(auth ? { auth } : {}) })
   return `${options.consoleUrl}/#${hash}`
 }

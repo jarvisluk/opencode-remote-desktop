@@ -93,7 +93,7 @@ export function registerBotCommands(
     name: "bot-link",
     description: tServer(locale, "cmd.screen.description"),
     execute: async ({ sessionID }: CommandInvocation) => {
-      const url = consoleLink(options, sessionID)
+      const url = consoleLink(options, sessionID, true)
       await syntheticSessionMessage(
         sessionID,
         url ? tServer(locale, "cmd.screen.prompt", { url }) : tServer(locale, "cmd.bot.consoleDisabled"),
