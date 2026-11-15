@@ -4,7 +4,8 @@ import h from "solid-js/h"
 import type { Ui } from "@opencode/plugin/gui"
 import { BotRpc } from "../rpc.ts"
 import { createGuiTranslator, type GuiMessageKey, type GuiTranslate } from "../i18n/gui.ts"
-import { T, agentCard, details, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
+import { T, agentCard, details, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, sleepOverlay, statusCard, takeoverCard, windowFill, type Tone } from "../ui.ts"
+import { createIdleWatcher, type IdleWatcher, type SleepReason } from "./idle.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -94,6 +95,7 @@ export function LiveStreamView(props: {
   const [link, setLink] = createSignal<LinkStats | null>(null)
   const [connectMs, setConnectMs] = createSignal(0)
   const [focused, setFocused] = createSignal(false)
+  const [sleeping, setSleeping] = createSignal<SleepReason | null>(null)
   const [screen, setScreen] = createSignal<{ owner: string; tool?: string; sessionIDs: string[] }>({ owner: "idle", sessionIDs: [] })
   const agentBusy = () => screen().owner === "agent"
 
@@ -108,6 +110,7 @@ export function LiveStreamView(props: {
   let screenTimer: ReturnType<typeof setInterval> | undefined
   let connectTimer: ReturnType<typeof setTimeout> | undefined
   let moveTimer: ReturnType<typeof setTimeout> | undefined
+  let idleWatcher: IdleWatcher | undefined
   let wheelRaf: number | undefined
   let disposed = false
   let lastMove = 0
@@ -144,39 +147,77 @@ export function LiveStreamView(props: {
     pendingWheel = { dx: 0, dy: 0 }
   }
 
-  const retryOrGiveUp = (reason: string) => {
-    if (disposed) return
-    if (attempt >= MAX_ATTEMPTS) return giveUp(reason)
+  const closeConnection = () => {
     clearInterval(statsTimer)
+    statsTimer = undefined
     clearTimeout(connectTimer)
+    connectTimer = undefined
     clearInputTimers()
     pc?.close()
+    pc = undefined
+    dc = undefined
+    if (video) video.srcObject = null
     if (session) void rpc()?.streamClose({ session }).catch(() => {})
     session = undefined
     setConnected(false)
+  }
+
+  const retryOrGiveUp = (reason: string) => {
+    if (disposed || sleeping() !== null) return
+    if (attempt >= MAX_ATTEMPTS) return giveUp(reason)
+    closeConnection()
     setStatus("reconnecting")
     setTimeout(() => void connect().catch((err) => giveUp(err?.message ?? String(err))), 600)
   }
 
   const teardown = () => {
     disposed = true
-    clearInterval(statsTimer)
+    idleWatcher?.dispose()
+    idleWatcher = undefined
     clearInterval(takeoverTimer)
     clearInterval(screenTimer)
-    clearTimeout(connectTimer)
-    clearInputTimers()
-    pc?.close()
-    if (session) void rpc()?.streamClose({ session }).catch(() => {})
+    closeConnection()
+  }
+
+  const startPollTimers = () => {
+    void checkScreen()
+    clearInterval(screenTimer)
+    screenTimer = setInterval(checkScreen, 1500)
+    if (!props.takeoverReason) {
+      void checkTakeovers()
+      clearInterval(takeoverTimer)
+      takeoverTimer = setInterval(checkTakeovers, 3000)
+    }
+  }
+
+  const enterSleep = (reason: SleepReason) => {
+    if (disposed || sleeping() !== null) return
+    setSleeping(reason)
+    setStatus("sleeping")
+    clearInterval(screenTimer)
+    screenTimer = undefined
+    clearInterval(takeoverTimer)
+    takeoverTimer = undefined
+    closeConnection()
+  }
+
+  const wakeFromSleep = () => {
+    if (disposed || sleeping() === null) return
+    setSleeping(null)
+    attempt = 0
+    setStatus("connecting")
+    startPollTimers()
+    void connect().catch((err) => giveUp(err?.message ?? String(err)))
   }
 
   const connect = async () => {
-    if (disposed) return
+    if (disposed || sleeping() !== null) return
     const client = rpc()
     if (!client) return giveUp("server disconnected")
     if (typeof RTCPeerConnection === "undefined") return giveUp("WebRTC unsupported")
 
     const mine = ++attempt
-    const current = () => !disposed && mine === attempt
+    const current = () => !disposed && sleeping() === null && mine === attempt
     const started = performance.now()
     pc = new RTCPeerConnection()
     const peer = pc
@@ -447,13 +488,18 @@ export function LiveStreamView(props: {
   })
 
   onMount(() => {
+    idleWatcher = createIdleWatcher({
+      isBusy: () => agentBusy() || Boolean(activeTakeover()),
+      onSleep: enterSleep,
+      onWake: () => wakeFromSleep(),
+    })
+    void rpc()?.status({}).then((s: any) => {
+      if (!disposed && typeof s?.streamIdleTimeoutMs === "number" && typeof s?.streamHiddenTimeoutMs === "number") {
+        idleWatcher?.setTimeouts(s.streamIdleTimeoutMs, s.streamHiddenTimeoutMs)
+      }
+    }).catch(() => {})
     void connect().catch((err) => giveUp(err?.message ?? String(err)))
-    void checkScreen()
-    screenTimer = setInterval(checkScreen, 1500)
-    if (!props.takeoverReason) {
-      void checkTakeovers()
-      takeoverTimer = setInterval(checkTakeovers, 3000)
-    }
+    startPollTimers()
   })
   onCleanup(() => {
     teardown()
@@ -464,8 +510,9 @@ export function LiveStreamView(props: {
   const fill = windowFill(() => root)
   const secret = secretPrompt(ui, { rpc: () => rpc(), sessionID: () => curSession()?.id, t })
 
-  const tone = (): Tone => (!connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.routeType === "relay" ? "warning" : "success")
+  const tone = (): Tone => (sleeping() || !connected() ? "muted" : status() === "reconnecting" ? "warning" : link()?.routeType === "relay" ? "warning" : "success")
   const summary = () => {
+    if (sleeping()) return t("stream.sleepingSummary")
     if (status() === "reconnecting") return t("webrtc.reconnecting")
     if (!connected()) return t("webrtc.connecting")
     const s = link()
@@ -539,9 +586,10 @@ export function LiveStreamView(props: {
       onPaste,
       style: videoStyle,
     })),
-    () => connected() ? null : h("div", {
+    () => sleeping() || connected() ? null : h("div", {
       style: { position: "absolute", inset: "0", display: "flex", "align-items": "center", "justify-content": "center", "pointer-events": "none" },
     }, h(ui.Loader, {})),
+    sleepOverlay(ui, { reason: sleeping, onWake: () => idleWatcher?.wake(), t }),
     statusCard({
       title: () => t("status.detailsTitle"),
       tone,

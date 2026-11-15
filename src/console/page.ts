@@ -398,6 +398,29 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
     }
     #loginError { margin: 0; color: var(--critical); min-height: 20px; }
     #loginForm .hint { margin: 0; color: var(--text-weak); font-size: 12px; line-height: 18px; }
+    #sleepOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      display: grid;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.56);
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      cursor: pointer;
+    }
+    .sleep-card {
+      padding: 18px 22px;
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      text-align: center;
+      max-width: 320px;
+    }
+    .sleep-title { font-weight: 500; color: var(--text-strong); }
+    .sleep-hint { font-size: 12px; color: var(--text-base); }
   </style>
 </head>
 <body data-top="closed" data-dock="closed">
@@ -406,6 +429,13 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
       <video id="screenVideo" autoplay muted playsinline tabindex="0" hidden></video>
       <img id="screenImg" data-i18n-alt="screenAlt" alt="${s.screenAlt}" />
       <div class="placeholder" id="placeholder" data-i18n="connectingMac">${s.connectingMac}</div>
+    </div>
+  </div>
+  <div id="sleepOverlay" hidden>
+    <div class="sleep-card glass">
+      <span class="sleep-title" id="sleepTitle">${s.sleepIdleTitle}</span>
+      <span class="sleep-hint" data-i18n="sleepHint">${s.sleepHint}</span>
+      <button class="primary" id="sleepResumeBtn" type="button" data-i18n="sleepResume">${s.sleepResume}</button>
     </div>
   </div>
 
@@ -599,10 +629,15 @@ export function renderConsoleHtml(defaultLocale: SupportedLocale = "en"): string
         (server ? $("loginPassword") : $("loginServer")).focus();
       }
 
+      let streamIdleTimeoutMs = 300000;
+      let streamHiddenTimeoutMs = 10000;
+
       async function connect() {
         try {
           const status = await rpc("status");
           streamAvailable = rtcSupported && status.streamAvailable;
+          if (typeof status.streamIdleTimeoutMs === "number") streamIdleTimeoutMs = status.streamIdleTimeoutMs;
+          if (typeof status.streamHiddenTimeoutMs === "number") streamHiddenTimeoutMs = status.streamHiddenTimeoutMs;
           $("login").hidden = true;
           if (!started) { started = true; start(); }
         } catch (e) {
@@ -647,6 +682,12 @@ let screenOwner = "idle";
       let continuousStop = true;
       let lastWheel = 0;
       let idleTimer = null;
+      let sleepReason = null;
+      let streamIdleTimer = null;
+      let streamHiddenTimer = null;
+      let lastStreamTouch = 0;
+      const sleepOverlayEl = $("sleepOverlay");
+      const sleepTitleEl = $("sleepTitle");
 
       // WebRTC state
       let pc = null;
@@ -832,13 +873,84 @@ let screenOwner = "idle";
 
       window.addEventListener("pagehide", () => closeWebRtc(true));
 
-      // 悬浮把手闲置变淡
+      // 悬浮把手闲置变淡 & 画面闲置休眠
+      function isBusy() {
+        return screenOwner === "agent" || banner.dataset.open === "true";
+      }
+      function scheduleStreamIdle() {
+        clearTimeout(streamIdleTimer);
+        streamIdleTimer = null;
+        if (!started || sleepReason || streamIdleTimeoutMs <= 0) return;
+        streamIdleTimer = setTimeout(() => {
+          streamIdleTimer = null;
+          if (!started || sleepReason) return;
+          if (isBusy()) { scheduleStreamIdle(); return; }
+          enterSleep("idle");
+        }, streamIdleTimeoutMs);
+      }
+      function scheduleStreamHidden() {
+        clearTimeout(streamHiddenTimer);
+        streamHiddenTimer = null;
+        if (!started || sleepReason || streamHiddenTimeoutMs <= 0 || !document.hidden) return;
+        streamHiddenTimer = setTimeout(() => {
+          streamHiddenTimer = null;
+          if (!started || sleepReason || !document.hidden) return;
+          if (isBusy()) { scheduleStreamHidden(); return; }
+          enterSleep("hidden");
+        }, streamHiddenTimeoutMs);
+      }
+      function enterSleep(reason) {
+        if (sleepReason) return;
+        sleepReason = reason;
+        clearTimeout(streamIdleTimer);
+        streamIdleTimer = null;
+        clearTimeout(streamHiddenTimer);
+        streamHiddenTimer = null;
+        closeWebRtc(true);
+        continuousStop = true;
+        clearTimeout(timer);
+        timer = null;
+        sleepTitleEl.textContent = t(reason === "hidden" ? "sleepHiddenTitle" : "sleepIdleTitle");
+        sleepOverlayEl.hidden = false;
+        setStatus(t("sleepingStatus"), "busy");
+      }
+      function wakeFromSleep() {
+        if (!sleepReason) return;
+        sleepReason = null;
+        sleepOverlayEl.hidden = true;
+        lastStreamTouch = Date.now();
+        scheduleStreamIdle();
+        if (fpsSelect.value === "webrtc" && streamAvailable && !windowSelect.value) {
+          startWebRtc();
+        } else {
+          fetchFrame(true);
+          scheduleLoop();
+        }
+      }
+      sleepOverlayEl.addEventListener("click", wakeFromSleep);
+      $("sleepResumeBtn").addEventListener("click", (ev) => { ev.stopPropagation(); wakeFromSleep(); });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) scheduleStreamHidden();
+        else {
+          clearTimeout(streamHiddenTimer);
+          streamHiddenTimer = null;
+          if (sleepReason === "hidden") wakeFromSleep();
+        }
+      });
+
       function wake() {
         handle.dataset.idle = "false";
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => { handle.dataset.idle = "true"; }, 2500);
+        if (!sleepReason && started) {
+          const now = Date.now();
+          if (now - lastStreamTouch >= 500 || !streamIdleTimer) {
+            lastStreamTouch = now;
+            scheduleStreamIdle();
+          }
+        }
       }
-      ["pointermove", "pointerdown", "keydown"].forEach((t) => document.addEventListener(t, wake, { passive: true }));
+      ["pointermove", "pointerdown", "keydown", "wheel", "touchstart"].forEach((t) => document.addEventListener(t, wake, { passive: true }));
       wake();
 
       // 面板唤出 / 收起
@@ -1274,6 +1386,8 @@ let screenOwner = "idle";
       });
 
       function start() {
+      scheduleStreamIdle();
+      if (document.hidden) scheduleStreamHidden();
       fetchState().then(() => {
         if (streamAvailable && !windowSelect.value) {
           startWebRtc();

@@ -34,10 +34,19 @@ export interface BotOptions {
   readonly streamBackend: StreamBackendPreference
   /** Overrides the ffmpeg capture-source args (used when the ffmpeg backend runs). */
   readonly ffmpegInputArgs: readonly string[]
+  /** Auto-sleep live stream after no user interaction for this many ms (0 disables). Default: 300000 (5 min). */
+  readonly streamIdleTimeoutMs: number
+  /** Auto-sleep live stream after page/window is hidden for this many ms (0 disables). Default: 10000 (10 s). */
+  readonly streamHiddenTimeoutMs: number
 }
 
 function intOption(v: unknown, min: number, max: number, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback
+}
+
+function optionalDurationOption(v: unknown, min: number, max: number, fallback: number): number {
+  if (v === 0) return 0
+  return intOption(v, min, max, fallback)
 }
 
 export function resolveOptions(raw: Record<string, unknown> | undefined): BotOptions {
@@ -85,5 +94,7 @@ export function resolveOptions(raw: Record<string, unknown> | undefined): BotOpt
     ffmpegInputArgs: Array.isArray(opts.ffmpegInputArgs)
       ? opts.ffmpegInputArgs.filter((s): s is string => typeof s === "string" && s.length > 0).slice(0, 64)
       : [],
+    streamIdleTimeoutMs: optionalDurationOption(opts.streamIdleTimeoutMs, 10_000, 3_600_000, 300_000),
+    streamHiddenTimeoutMs: optionalDurationOption(opts.streamHiddenTimeoutMs, 1_000, 300_000, 10_000),
   }
 }

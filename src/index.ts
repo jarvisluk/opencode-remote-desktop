@@ -201,6 +201,8 @@ export default Plugin.define({
           streamAvailable: Boolean(stream),
           activeTakeovers: summary.activeTakeovers.length,
           routineCount: summary.routines.length,
+          streamIdleTimeoutMs: options.streamIdleTimeoutMs,
+          streamHiddenTimeoutMs: options.streamHiddenTimeoutMs,
         }
       },
       frame: async (rawInput, callCtx) => {

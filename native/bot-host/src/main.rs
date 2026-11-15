@@ -76,15 +76,48 @@ async fn main() -> Result<()> {
     run_stdio_rpc().await
 }
 
+async fn wait_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).ok();
+        let ctrl_c = tokio::signal::ctrl_c();
+        match sigterm {
+            Some(ref mut s) => {
+                tokio::select! {
+                    _ = ctrl_c => {}
+                    _ = s.recv() => {}
+                }
+            }
+            None => {
+                let _ = ctrl_c.await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 async fn run_stdio_rpc() -> Result<()> {
     let sessions = Arc::new(SessionManager::new());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut inflight = tokio::task::JoinSet::new();
+    let shutdown = wait_shutdown_signal();
+    tokio::pin!(shutdown);
 
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
         while inflight.try_join_next().is_some() {}
+        let next = tokio::select! {
+            _ = &mut shutdown => break,
+            res = lines.next_line() => res,
+        };
+        let Ok(Some(line)) = next else {
+            break;
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

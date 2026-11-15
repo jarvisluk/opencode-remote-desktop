@@ -112,6 +112,11 @@ export const guiEn = {
   "err.windowNotFound.hint": "Switch back to 'Entire screen' or refresh the window list in the bottom-right toolbar.",
   "err.serverDisconnected.summary": "Disconnected from remote server",
   "err.serverDisconnected.hint": "Check whether the remote OpenCode server is online and OpenTunnel / network connection is active.",
+  "stream.sleepingSummary": "Live stream · Sleeping",
+  "stream.sleepIdleTitle": "Screen stream paused due to inactivity",
+  "stream.sleepHiddenTitle": "Screen stream paused while in background",
+  "stream.sleepHint": "Click anywhere to resume",
+  "stream.sleepResume": "Resume",
 } as const satisfies Messages
 
 export type GuiMessageKey = keyof typeof guiEn
@@ -225,6 +230,11 @@ export const guiZh: Record<GuiMessageKey, string> = {
   "err.windowNotFound.hint": "请在右下角切换回「整个屏幕」或刷新窗口列表。",
   "err.serverDisconnected.summary": "与远端服务器的连接已断开",
   "err.serverDisconnected.hint": "请检查远端 OpenCode 服务是否在线以及 OpenTunnel / 网络连接状态。",
+  "stream.sleepingSummary": "实时画面 · 已休眠",
+  "stream.sleepIdleTitle": "长时间无操作，已暂停屏幕录制",
+  "stream.sleepHiddenTitle": "窗口在后台运行，已暂停屏幕录制",
+  "stream.sleepHint": "点击画面任意处恢复",
+  "stream.sleepResume": "恢复画面",
 }
 
 export const guiZht: Record<GuiMessageKey, string> = {
@@ -336,6 +346,11 @@ export const guiZht: Record<GuiMessageKey, string> = {
   "err.windowNotFound.hint": "請在右下角切換回「整個螢幕」或重新整理視窗列表。",
   "err.serverDisconnected.summary": "與遠端伺服器的連線已中斷",
   "err.serverDisconnected.hint": "請檢查遠端 OpenCode 服務是否在線以及 OpenTunnel / 網路連線狀態。",
+  "stream.sleepingSummary": "即時畫面 · 已休眠",
+  "stream.sleepIdleTitle": "長時間無操作，已暫停螢幕錄製",
+  "stream.sleepHiddenTitle": "視窗在背景執行，已暫停螢幕錄製",
+  "stream.sleepHint": "點擊畫面任意處恢復",
+  "stream.sleepResume": "恢復畫面",
 }
 
 // OpenCode Desktop looks up `catalog[locale]` directly without BCP-47 prefix fallback,

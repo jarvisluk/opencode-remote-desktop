@@ -378,3 +378,57 @@ export function explainScreenError(raw: string, t: GuiTranslate = DEFAULT_ERR_T)
   }
   return { summary: msg, raw: msg }
 }
+
+/**
+ * Full-panel glass overlay shown when the live stream enters idle or background sleep.
+ */
+export function sleepOverlay(
+  ui: Ui,
+  p: { reason: () => "idle" | "hidden" | null; onWake: () => void; t: GuiTranslate },
+): JSX.Element {
+  return (() => {
+    const r = p.reason()
+    if (!r) return null
+    return h("div", {
+      onClick: () => p.onWake(),
+      style: {
+        position: "absolute",
+        inset: "0",
+        display: "flex",
+        "align-items": "center",
+        "justify-content": "center",
+        background: "rgba(0, 0, 0, 0.56)",
+        "backdrop-filter": "blur(6px)",
+        cursor: "pointer",
+        "z-index": "5",
+      },
+    }, h("div", {
+      style: {
+        background: T.bgLayer,
+        "box-shadow": T.elevation,
+        "border-radius": T.radius,
+        padding: `${T.sp(3)} ${T.sp(4)}`,
+        display: "flex",
+        "flex-direction": "column",
+        "align-items": "center",
+        gap: T.sp(1.5),
+        "text-align": "center",
+        "max-width": "320px",
+      },
+    }, [
+      h("span", { style: { color: T.text, "font-weight": "500" } }, () =>
+        p.t(r === "hidden" ? "stream.sleepHiddenTitle" : "stream.sleepIdleTitle"),
+      ),
+      h("span", { style: { color: T.muted, "font-size": T.small } }, () => p.t("stream.sleepHint")),
+      h(ui.Button, {
+        variant: "contrast",
+        size: "small",
+        onClick: (e: MouseEvent) => {
+          e.stopPropagation()
+          p.onWake()
+        },
+        children: (() => p.t("stream.sleepResume")) as any,
+      }),
+    ]))
+  }) as unknown as JSX.Element
+}

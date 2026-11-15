@@ -7,8 +7,9 @@ import h from "solid-js/h"
 import { BotRpc } from "./rpc.ts"
 import type { RemoteInputKind } from "./input-types.ts"
 import { LiveStreamView, channelOf } from "./stream/view.ts"
+import { createIdleWatcher, type IdleWatcher, type SleepReason } from "./stream/idle.ts"
 import { createGuiTranslator, guiCatalog, type GuiMessageKey, type GuiTranslate } from "./i18n/gui.ts"
-import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
+import { T, agentCard, details, explainScreenError, floating, iconButton, isFullscreenKey, rootStyle, secretPrompt, sleepOverlay, statusCard, takeoverCard, windowFill, type Tone } from "./ui.ts"
 
 const DEFAULT_T = createGuiTranslator("en")
 
@@ -78,6 +79,7 @@ export function LiveScreenView(props: {
   const [takeover, setTakeover] = createSignal<{ active: boolean; reason: string }>({ active: false, reason: "" })
   const [showLink, setShowLink] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
+  const [sleeping, setSleeping] = createSignal<SleepReason | null>(null)
   const [screen, setScreen] = createSignal<{ owner: string; tool?: string; sessionIDs: string[] }>({ owner: "idle", sessionIDs: [] })
   const agentBusy = () => screen().owner === "agent"
 
@@ -85,6 +87,8 @@ export function LiveScreenView(props: {
   let rootRef: HTMLDivElement | undefined
   let isRequestInProgress = false
   let lastFrameAt = 0
+  let resumeStreamingOnWake = false
+  let idleWatcher: IdleWatcher | undefined
 
   const getClientRpc = () => {
     try {
@@ -256,11 +260,34 @@ export function LiveScreenView(props: {
   })
 
   onMount(() => {
+    let alive = true
+    idleWatcher = createIdleWatcher({
+      isBusy: () => agentBusy() || Boolean(activeTakeoverReason()),
+      onSleep: (reason) => {
+        resumeStreamingOnWake = streaming()
+        setSleeping(reason)
+        setStreaming(false)
+      },
+      onWake: () => {
+        setSleeping(null)
+        if (resumeStreamingOnWake) setStreaming(true)
+      },
+    })
+    void getClientRpc()?.status({}).then((s: any) => {
+      if (alive && typeof s?.streamIdleTimeoutMs === "number" && typeof s?.streamHiddenTimeoutMs === "number") {
+        idleWatcher?.setTimeouts(s.streamIdleTimeoutMs, s.streamHiddenTimeoutMs)
+      }
+    }).catch(() => {})
     void refreshWindows()
     void fetchNextFrame()
     void checkScreen()
     const screenTimer = setInterval(checkScreen, 1500)
-    onCleanup(() => clearInterval(screenTimer))
+    onCleanup(() => {
+      alive = false
+      clearInterval(screenTimer)
+      idleWatcher?.dispose()
+      idleWatcher = undefined
+    })
     if (!props.takeoverReason) {
       void checkTakeovers()
       const takeoverTimer = setInterval(checkTakeovers, 3000)
@@ -299,17 +326,19 @@ export function LiveScreenView(props: {
   }
   const errInfo = () => explainScreenError(errorText(), t)
   const fallbackInfo = () => explainScreenError(props.reason || "", t)
-  const tone = (): Tone => (error() ? "danger" : !frame() ? "muted" : "warning")
+  const tone = (): Tone => (sleeping() ? "muted" : error() ? "danger" : !frame() ? "muted" : "warning")
   const summary = () =>
-    errorText()
-      ? errInfo().serviceUnavailable
-        ? t("jpeg.serviceUnavailableSummary", { error: errInfo().summary })
-        : t("jpeg.summaryError", { error: errInfo().summary })
-      : !frame()
-        ? t("jpeg.summaryConnecting")
-        : !streaming()
-          ? t("jpeg.summaryPaused")
-          : t("jpeg.summaryLive", { fps: fps(), rtt: rtt() })
+    sleeping()
+      ? t("stream.sleepingSummary")
+      : errorText()
+        ? errInfo().serviceUnavailable
+          ? t("jpeg.serviceUnavailableSummary", { error: errInfo().summary })
+          : t("jpeg.summaryError", { error: errInfo().summary })
+        : !frame()
+          ? t("jpeg.summaryConnecting")
+          : !streaming()
+            ? t("jpeg.summaryPaused")
+            : t("jpeg.summaryLive", { fps: fps(), rtt: rtt() })
 
   const windowOptions = () => [
     { value: "", label: t("jpeg.entireScreen") },
@@ -374,6 +403,14 @@ export function LiveScreenView(props: {
             ]),
           ])
         : h(ui.Loader, {})),
+    sleepOverlay(ui, {
+      reason: sleeping,
+      onWake: () => {
+        resumeStreamingOnWake = true
+        idleWatcher?.wake()
+      },
+      t,
+    }),
     statusCard({
       title: () => t("status.detailsTitle"),
       tone,

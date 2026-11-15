@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { channelOf } from "../src/stream/view.ts"
+import { createIdleWatcher, type SleepReason } from "../src/stream/idle.ts"
 import { explainScreenError } from "../src/ui.ts"
 import { createGuiTranslator } from "../src/i18n/gui.ts"
 
@@ -50,4 +51,75 @@ test("explainScreenError translates raw RPC and WebRTC errors into clear diagnos
   const permErr = explainScreenError("Screen Recording permission denied")
   assert.match(permErr.summary, /屏幕录制权限/)
   assert.ok(permErr.hint)
+})
+
+function createFakeTarget() {
+  const listeners = new Map<string, Set<() => void>>()
+  return {
+    addEventListener(type: string, fn: () => void) {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add(fn)
+    },
+    removeEventListener(type: string, fn: () => void) {
+      listeners.get(type)?.delete(fn)
+    },
+    emit(type: string) {
+      for (const fn of listeners.get(type) ?? []) fn()
+    },
+  }
+}
+
+test("createIdleWatcher sleeps on idle, skips when busy, and wakes on visibility restore", async () => {
+  const target = createFakeTarget()
+  const doc = { ...createFakeTarget(), hidden: false }
+  const events: string[] = []
+  let busy = true
+
+  const watcher = createIdleWatcher({
+    idleTimeoutMs: 30,
+    hiddenTimeoutMs: 20,
+    isBusy: () => busy,
+    target,
+    doc,
+    onSleep: (reason: SleepReason) => events.push(`sleep:${reason}`),
+    onWake: (from: SleepReason) => events.push(`wake:${from}`),
+  })
+
+  // Still busy after first timeout -> should stay awake
+  await new Promise((r) => setTimeout(r, 45))
+  assert.deepEqual(events, [])
+  assert.equal(watcher.sleeping, null)
+
+  // Clear busy -> next idle timeout puts it to sleep
+  busy = false
+  await new Promise((r) => setTimeout(r, 45))
+  assert.deepEqual(events, ["sleep:idle"])
+  assert.equal(watcher.sleeping, "idle")
+
+  // Visibility restore does not auto-wake an idle sleep
+  doc.hidden = false
+  doc.emit("visibilitychange")
+  assert.equal(watcher.sleeping, "idle")
+
+  // Manual wake resumes
+  watcher.wake()
+  assert.deepEqual(events, ["sleep:idle", "wake:idle"])
+  assert.equal(watcher.sleeping, null)
+
+  // Hidden sleep auto-wakes when document becomes visible again
+  doc.hidden = true
+  doc.emit("visibilitychange")
+  await new Promise((r) => setTimeout(r, 35))
+  assert.equal(watcher.sleeping, "hidden")
+
+  doc.hidden = false
+  doc.emit("visibilitychange")
+  assert.equal(watcher.sleeping, null)
+  assert.deepEqual(events, ["sleep:idle", "wake:idle", "sleep:hidden", "wake:hidden"])
+
+  watcher.dispose()
 })

@@ -18,6 +18,8 @@ test("options resolver applies sensible defaults", () => {
   assert.equal(opts.maxImageDimension, 1440)
   assert.equal(opts.jpegQuality, 72)
   assert.equal(opts.routinePollMs, 30000)
+  assert.equal(opts.streamIdleTimeoutMs, 300000)
+  assert.equal(opts.streamHiddenTimeoutMs, 10000)
 })
 
 test("options resolver sanitizes bounded numbers and strings", () => {
@@ -37,6 +39,9 @@ test("options resolver sanitizes bounded numbers and strings", () => {
   assert.equal(opts.jpegQuality, 20) // bounded min
   assert.equal(opts.routinePollMs, 30000) // bounded min
   assert.equal(opts.serverUrl, "https://tunnel.example.com")
+  const disabled = resolveOptions({ streamIdleTimeoutMs: 0, streamHiddenTimeoutMs: 0 })
+  assert.equal(disabled.streamIdleTimeoutMs, 0)
+  assert.equal(disabled.streamHiddenTimeoutMs, 0)
 })
 
 test("routine next run calculation handles intervals and daily time", () => {

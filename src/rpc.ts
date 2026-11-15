@@ -18,6 +18,8 @@ export const BotRpc = Rpc.define({
           streamAvailable: { type: "boolean" },
           activeTakeovers: { type: "number" },
           routineCount: { type: "number" },
+          streamIdleTimeoutMs: { type: "number" },
+          streamHiddenTimeoutMs: { type: "number" },
         },
         required: [
           "platform",
