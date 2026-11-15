@@ -27,6 +27,7 @@
   "files": [
     "src",
     "dist/gui-experimental.cjs",
+    "scripts/install-host.mjs",
     "native/README.md",
     "native/bot-host/Cargo.toml",
     "native/bot-host/Cargo.lock",
@@ -36,7 +37,8 @@
   "scripts": {
     "build": "node scripts/build-gui.js",
     "build:native": "node scripts/build-native.js",
-    "prepare:host-packages": "node scripts/prepare-host-packages.mjs",
+    "postinstall": "node scripts/install-host.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
     "dev": "node scripts/dev.js",
     "install:macbook": "sh scripts/install-macbook.sh",
     "harness": "node test/stream-harness.mjs",
@@ -44,14 +46,6 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "build:pages": "node scripts/build-pages.js",
     "prepack": "npm run build"
-  },
-  "optionalDependencies": {
-    "@opencode-bot/host-darwin-arm64": "0.1.0",
-    "@opencode-bot/host-darwin-x64": "0.1.0",
-    "@opencode-bot/host-win32-x64": "0.1.0",
-    "@opencode-bot/host-win32-arm64": "0.1.0",
-    "@opencode-bot/host-linux-x64": "0.1.0",
-    "@opencode-bot/host-linux-arm64": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

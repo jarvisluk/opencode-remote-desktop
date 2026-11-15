@@ -1,13 +1,83 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { BotHostClient, hostPlatformPackageName, resolveHostBinary } from "../src/host/client.ts"
+import { createHash } from "node:crypto"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import http from "node:http"
+import os from "node:os"
+import path from "node:path"
+import {
+  BotHostClient,
+  downloadHostBinary,
+  getCachedHostBinaryPath,
+  hostAssetName,
+  parseSha256Sums,
+  resolveHostBinary,
+} from "../src/host/client.ts"
 import { StreamSidecar } from "../src/stream/sidecar.ts"
 
 describe("BotHostClient", () => {
-  it("formats per-platform optional package names", () => {
-    assert.equal(hostPlatformPackageName("darwin", "arm64"), "@opencode-bot/host-darwin-arm64")
-    assert.equal(hostPlatformPackageName("win32", "x64"), "@opencode-bot/host-win32-x64")
-    assert.equal(hostPlatformPackageName("linux", "x64"), "@opencode-bot/host-linux-x64")
+  it("formats per-platform release asset names and cache paths", () => {
+    assert.equal(hostAssetName("darwin", "arm64"), "bot-host-darwin-arm64")
+    assert.equal(hostAssetName("win32", "x64"), "bot-host-win32-x64.exe")
+    assert.equal(hostAssetName("linux", "x64"), "bot-host-linux-x64")
+    const cached = getCachedHostBinaryPath("linux", "x64", "0.2.0")
+    assert.match(cached, /opencode-remote-desktop[\\/]+v0\.2\.0[\\/]+bot-host-linux-x64$/)
+  })
+
+  it("parses SHA256SUMS.txt and downloads + verifies host binary", async () => {
+    const payload = Buffer.from("#!/bin/sh\necho ok\n", "utf8")
+    const digest = createHash("sha256").update(payload).digest("hex")
+    const sums = parseSha256Sums(`${digest}  bot-host-linux-x64\n${"0".repeat(64)} *./bot-host-darwin-arm64\n`)
+    assert.equal(sums.get("bot-host-linux-x64"), digest)
+    assert.equal(sums.get("bot-host-darwin-arm64"), "0".repeat(64))
+
+    let badHash = false
+    const server = http.createServer((req, res) => {
+      if (req.url === "/SHA256SUMS.txt") {
+        res.writeHead(200, { "content-type": "text/plain" })
+        res.end(`${badHash ? "f".repeat(64) : digest}  bot-host-linux-x64\n`)
+        return
+      }
+      if (req.url === "/bot-host-linux-x64") {
+        res.writeHead(200, { "content-type": "application/octet-stream" })
+        res.end(payload)
+        return
+      }
+      res.writeHead(404).end()
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
+    const addr = server.address()
+    assert.ok(addr && typeof addr === "object")
+    const baseUrl = `http://127.0.0.1:${addr.port}`
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "bot-host-dl-"))
+    try {
+      const dest = path.join(tmpDir, "bot-host-linux-x64")
+      const out = await downloadHostBinary({
+        platform: "linux",
+        arch: "x64",
+        version: "0.2.0",
+        baseUrl,
+        destPath: dest,
+      })
+      assert.equal(out, dest)
+      assert.deepEqual(readFileSync(dest), payload)
+
+      badHash = true
+      await assert.rejects(
+        () =>
+          downloadHostBinary({
+            platform: "linux",
+            arch: "x64",
+            version: "0.2.0",
+            baseUrl,
+            destPath: path.join(tmpDir, "bad-bin"),
+          }),
+        /SHA-256 mismatch/,
+      )
+    } finally {
+      server.close()
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   it("communicates with the compiled bot-host binary over stdio JSON-RPC", async (t) => {

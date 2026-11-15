@@ -2,7 +2,7 @@
 
 `native/bot-host` is a single Rust binary that replaces the previous Go WebRTC sidecar (`bot-stream`), Swift capture helper (`bot-capture`), and platform shell wrappers (`security`, `screencapture`, `sips`, `caffeinate`, `pbcopy`).
 
-Built locally into `dist/bin/bot-host-<platform>-<arch>[.exe]` via `npm run build:native`, or distributed as per-platform npm `optionalDependencies` (`@opencode-bot/host-<platform>-<arch>`).
+Built locally into `dist/bin/bot-host-<platform>-<arch>[.exe]` via `npm run build:native`, or downloaded automatically from the matching GitHub Release (`SHA256SUMS.txt` verified) into the user cache directory during `postinstall` / first RPC call.
 
 ## Architecture
 

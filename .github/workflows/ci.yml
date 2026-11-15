@@ -28,11 +28,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y nasm
 
-      - run: npm ci --omit=optional
+      - run: npm ci
+        env:
+          OPENCODE_BOT_SKIP_DOWNLOAD: "1"
 
       - run: npm run typecheck
 
-      - run: npm test
-
       - name: Cargo test & build bot-host
         run: cargo test --manifest-path native/bot-host/Cargo.toml && npm run build:native
+
+      - run: npm test

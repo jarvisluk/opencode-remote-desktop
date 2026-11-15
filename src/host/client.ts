@@ -1,53 +1,50 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { existsSync } from "node:fs"
-import { createRequire } from "node:module"
-import path from "node:path"
 import { createInterface } from "node:readline"
-import { fileURLToPath } from "node:url"
+import {
+  downloadHostBinary,
+  getDefaultRepoRoot,
+  hostAssetName,
+  resolveHostBinarySync,
+} from "./release.mjs"
 
-const require = createRequire(import.meta.url)
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+export {
+  downloadHostBinary,
+  getCachedHostBinaryPath,
+  getHostCacheDir,
+  getPackageVersion,
+  getReleaseBaseUrl,
+  hostAssetName,
+  isSupportedHostTarget,
+  parseSha256Sums,
+} from "./release.mjs"
 
-export function hostPlatformPackageName(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): string {
-  return `@opencode-bot/host-${platform}-${arch}`
-}
+const repoRoot = getDefaultRepoRoot()
 
 export function resolveHostBinary(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string | null {
-  const envBin = process.env.OPENCODE_BOT_HOST_BIN?.trim()
-  if (envBin && existsSync(envBin)) {
-    return envBin
-  }
+  return resolveHostBinarySync(repoRoot, platform, arch)
+}
 
-  const ext = platform === "win32" ? ".exe" : ""
-  const localBin = path.join(repoRoot, "dist", "bin", `bot-host-${platform}-${arch}${ext}`)
-  if (existsSync(localBin)) {
-    return localBin
-  }
+let inflightDownload: Promise<string> | null = null
 
-  try {
-    const pkgJson = require.resolve(`${hostPlatformPackageName(platform, arch)}/package.json`)
-    const pkgBin = path.join(path.dirname(pkgJson), "bin", `bot-host${ext}`)
-    if (existsSync(pkgBin)) {
-      return pkgBin
-    }
-  } catch {
-    // Optional platform package not installed.
+export async function ensureHostBinary(): Promise<string> {
+  const existing = resolveHostBinary()
+  if (existing) {
+    return existing
   }
-
-  if (platform === process.platform && arch === process.arch) {
-    const cargoBin = path.join(repoRoot, "native", "bot-host", "target", "release", `bot-host${ext}`)
-    if (existsSync(cargoBin)) {
-      return cargoBin
-    }
+  if (process.env.OPENCODE_BOT_SKIP_DOWNLOAD === "1") {
+    throw new Error(
+      `bot-host binary missing for ${process.platform}-${process.arch} (download disabled via OPENCODE_BOT_SKIP_DOWNLOAD=1; run \`npm run build:native\`)`,
+    )
   }
-
-  return null
+  const pending =
+    inflightDownload ??
+    (inflightDownload = downloadHostBinary({ repoRoot }).finally(() => {
+      inflightDownload = null
+    }))
+  return pending
 }
 
 interface PendingRpc {
@@ -59,6 +56,7 @@ interface PendingRpc {
 
 export class BotHostClient {
   private proc: ChildProcessWithoutNullStreams | null = null
+  private starting: Promise<ChildProcessWithoutNullStreams> | null = null
   private nextId = 1
   private pending = new Map<number, PendingRpc>()
   private keepAwakeWanted = false
@@ -85,95 +83,109 @@ export class BotHostClient {
     }
   }
 
-  private ensureStarted(): ChildProcessWithoutNullStreams {
+  private async ensureStarted(): Promise<ChildProcessWithoutNullStreams> {
     if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
       return this.proc
     }
-
-    const bin = resolveHostBinary()
-    if (!bin) {
-      throw new Error(
-        `bot-host binary missing for ${process.platform}-${process.arch} (run \`npm run build:native\` or install ${hostPlatformPackageName()})`,
-      )
+    if (this.starting) {
+      return this.starting
     }
 
-    const proc = spawn(bin, ["--stdio"], {
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    this.proc = proc
-
-    let stderrTail = ""
-    proc.stderr.on("data", (chunk: Buffer) => {
-      stderrTail = (stderrTail + chunk.toString("utf8")).slice(-1024)
-      if (process.env.OPENCODE_BOT_HOST_DEBUG === "1") {
-        process.stderr.write(chunk)
+    this.starting = (async () => {
+      const bin = await ensureHostBinary().catch((err) => {
+        throw new Error(
+          `bot-host binary unavailable for ${process.platform}-${process.arch} (${hostAssetName()}): ${err instanceof Error ? err.message : String(err)}`,
+        )
+      })
+      if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
+        return this.proc
       }
-    })
 
-    createInterface({ input: proc.stdout }).on("line", (line) => {
-      const trimmed = line.trim()
-      if (!trimmed) return
-      let msg: { id?: unknown; result?: unknown; error?: { code?: number; message?: string } }
-      try {
-        msg = JSON.parse(trimmed)
-      } catch {
-        return
-      }
-      if (typeof msg.id !== "number") return
-      const req = this.pending.get(msg.id)
-      if (!req) return
-      this.pending.delete(msg.id)
-      clearTimeout(req.timer)
-      req.cleanupAbort?.()
-      this.updateRefState()
+      const proc = spawn(bin, ["--stdio"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+      this.proc = proc
 
-      if (msg.error) {
-        req.reject(new Error(msg.error.message || "bot-host RPC error"))
-      } else {
-        req.resolve(msg.result)
-      }
-    })
+      let stderrTail = ""
+      proc.stderr.on("data", (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString("utf8")).slice(-1024)
+        if (process.env.OPENCODE_BOT_HOST_DEBUG === "1") {
+          process.stderr.write(chunk)
+        }
+      })
 
-    const failAll = (reason: string) => {
-      if (this.proc === proc) {
-        this.proc = null
-      }
-      for (const [id, req] of this.pending) {
-        this.pending.delete(id)
+      createInterface({ input: proc.stdout }).on("line", (line) => {
+        const trimmed = line.trim()
+        if (!trimmed) return
+        let msg: { id?: unknown; result?: unknown; error?: { code?: number; message?: string } }
+        try {
+          msg = JSON.parse(trimmed)
+        } catch {
+          return
+        }
+        if (typeof msg.id !== "number") return
+        const req = this.pending.get(msg.id)
+        if (!req) return
+        this.pending.delete(msg.id)
         clearTimeout(req.timer)
         req.cleanupAbort?.()
-        req.reject(new Error(reason))
+        this.updateRefState()
+
+        if (msg.error) {
+          req.reject(new Error(msg.error.message || "bot-host RPC error"))
+        } else {
+          req.resolve(msg.result)
+        }
+      })
+
+      const failAll = (reason: string) => {
+        if (this.proc === proc) {
+          this.proc = null
+        }
+        for (const [id, req] of this.pending) {
+          this.pending.delete(id)
+          clearTimeout(req.timer)
+          req.cleanupAbort?.()
+          req.reject(new Error(reason))
+        }
       }
-    }
 
-    proc.on("error", (err) => {
-      failAll(`bot-host process error: ${err.message}`)
+      proc.on("error", (err) => {
+        failAll(`bot-host process error: ${err.message}`)
+      })
+
+      proc.on("exit", (code, sig) => {
+        const detail = stderrTail.trim()
+        failAll(
+          `bot-host exited (${code ?? sig ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+        )
+      })
+
+      if (this.keepAwakeWanted) {
+        void this.sendRaw("power.keepAwake", { enabled: true }).catch(() => {})
+      }
+
+      this.updateRefState()
+      return proc
+    })().finally(() => {
+      this.starting = null
     })
 
-    proc.on("exit", (code, sig) => {
-      const detail = stderrTail.trim()
-      failAll(
-        `bot-host exited (${code ?? sig ?? "unknown"})${detail ? `: ${detail}` : ""}`,
-      )
-    })
-
-    if (this.keepAwakeWanted) {
-      void this.sendRaw("power.keepAwake", { enabled: true }).catch(() => {})
-    }
-
-    this.updateRefState()
-    return proc
+    return this.starting
   }
 
-  private sendRaw<T>(
+  private async sendRaw<T>(
     method: string,
     params: Record<string, unknown>,
     options?: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
   ): Promise<T> {
     if (options?.signal?.aborted) {
-      return Promise.reject(new Error("Aborted"))
+      throw new Error("Aborted")
     }
-    const proc = this.ensureStarted()
+    const proc = await this.ensureStarted()
+    if (options?.signal?.aborted) {
+      throw new Error("Aborted")
+    }
     const id = this.nextId++
     if (this.nextId > 0x7fff_ff00) this.nextId = 1
     const timeoutMs = options?.timeoutMs ?? 15_000
