@@ -105,13 +105,19 @@ test("macos exec environment and binary resolution", async () => {
   assert.ok(macPath.includes("/usr/bin"))
   assert.ok(macPath.includes("/opt/homebrew/bin"))
 
-  const sipsBin = resolveBinary("sips")
-  assert.ok(sipsBin !== null)
+  const shellBin = resolveBinary(process.platform === "win32" ? "cmd" : "sh")
+  assert.ok(shellBin !== null)
 
   const status = await getMacDesktopStatus()
-  assert.equal(status.platform, "darwin")
-  assert.equal(status.supported, true)
-  assert.ok(["granted", "denied", "prompt", "unknown", "missing_agent_desktop"].includes(status.accessibility))
+  assert.equal(status.platform, process.platform)
+  assert.equal(typeof status.supported, "boolean")
+
+  if (process.platform === "darwin") {
+    const sipsBin = resolveBinary("sips")
+    assert.ok(sipsBin !== null)
+    assert.equal(status.supported, true)
+    assert.ok(["granted", "denied", "prompt", "unknown", "missing_agent_desktop"].includes(status.accessibility))
+  }
 })
 
 test("takeover manager supports non-blocking request, source tracking, and superseding", () => {
