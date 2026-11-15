@@ -109,16 +109,18 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>> {
     if let Ok(res_cookie) = conn.randr_get_screen_resources_current(root) {
         if let Ok(res) = res_cookie.reply() {
             for (idx, output) in res.outputs.iter().enumerate() {
-                if let Ok(info) = conn
+                if let Some(info) = conn
                     .randr_get_output_info(*output, res.config_timestamp)
-                    .and_then(|c| c.reply().map_err(Into::into))
+                    .ok()
+                    .and_then(|c| c.reply().ok())
                 {
                     if info.crtc == 0 || info.connection != randr::Connection::CONNECTED {
                         continue;
                     }
-                    if let Ok(crtc) = conn
+                    if let Some(crtc) = conn
                         .randr_get_crtc_info(info.crtc, res.config_timestamp)
-                        .and_then(|c| c.reply().map_err(Into::into))
+                        .ok()
+                        .and_then(|c| c.reply().ok())
                     {
                         if crtc.width == 0 || crtc.height == 0 {
                             continue;
@@ -204,7 +206,7 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
         return Ok(out);
     };
     for win in ids {
-        let Ok(geom) = conn.get_geometry(win).and_then(|c| c.reply().map_err(Into::into)) else {
+        let Some(geom) = conn.get_geometry(win).ok().and_then(|c| c.reply().ok()) else {
             continue;
         };
         if geom.width < 40 || geom.height < 40 {
@@ -316,8 +318,8 @@ pub fn capture_jpeg(
     };
     let raw = capture_x11_bgra(&conn, drawable, req_x, req_y, lw as u16, lh as u16)?;
     let (out_w, out_h) = fit_within_max_dim(lw, lh, max_dim);
-    let scaled = downscale_bgra(&raw, lw, lh, out_w, out_h);
-    let jpeg = encode_jpeg_from_bgra(&scaled, out_w, out_h, quality)?;
+    let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
+    let jpeg = encode_jpeg_from_bgra(&scaled, out_w as usize, out_h as usize, (out_w as usize) * 4, quality)?;
     Ok(CaptureResult {
         data_base64: base64::engine::general_purpose::STANDARD.encode(&jpeg),
         mime: "image/jpeg".to_string(),
@@ -457,7 +459,7 @@ pub fn start_video_stream(
                     if let Ok(raw) =
                         capture_x11_bgra(&conn, drawable, req_x, req_y, lw as u16, lh as u16)
                     {
-                        let scaled = downscale_bgra(&raw, lw, lh, out_w, out_h);
+                        let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
                         let yuv = YUVBuffer::from_bgra8_source(BgraSliceU8::new(
                             &scaled,
                             (out_w as usize, out_h as usize),

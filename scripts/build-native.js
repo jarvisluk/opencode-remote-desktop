@@ -8,11 +8,31 @@ import { fileURLToPath } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const crateDir = path.join(root, "native/bot-host")
 const outDir = path.join(root, "dist/bin")
-const { platform, arch } = process
-const ext = platform === "win32" ? ".exe" : ""
+const { platform: hostPlatform, arch: hostArch } = process
+const targetTriple = process.env.CARGO_BUILD_TARGET?.trim()
+
+function resolveTarget(triple) {
+  switch (triple) {
+    case "aarch64-apple-darwin":
+      return { platform: "darwin", arch: "arm64", ext: "" }
+    case "x86_64-apple-darwin":
+      return { platform: "darwin", arch: "x64", ext: "" }
+    case "x86_64-pc-windows-msvc":
+      return { platform: "win32", arch: "x64", ext: ".exe" }
+    case "aarch64-pc-windows-msvc":
+      return { platform: "win32", arch: "arm64", ext: ".exe" }
+    case "x86_64-unknown-linux-gnu":
+      return { platform: "linux", arch: "x64", ext: "" }
+    case "aarch64-unknown-linux-gnu":
+      return { platform: "linux", arch: "arm64", ext: "" }
+    default:
+      return { platform: hostPlatform, arch: hostArch, ext: hostPlatform === "win32" ? ".exe" : "" }
+  }
+}
+
+const { platform, arch, ext } = resolveTarget(targetTriple)
 mkdirSync(outDir, { recursive: true })
 
-const targetTriple = process.env.CARGO_BUILD_TARGET?.trim()
 const args = ["build", "--release"]
 if (targetTriple) {
   args.push("--target", targetTriple)

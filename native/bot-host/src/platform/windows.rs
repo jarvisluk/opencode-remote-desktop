@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use openh264::encoder::{BitRate, Encoder, EncoderConfig, FrameRate, RateControlMode, SpsPpsStrategy, UsageType};
 use openh264::formats::{BgraSliceU8, YUVBuffer};
 use openh264::OpenH264API;
@@ -258,8 +259,8 @@ pub fn capture_jpeg(
     let (ox, oy, lw, lh, label) = resolve_target_rect(&target)?;
     let raw = capture_rect_bgra(ox, oy, lw, lh)?;
     let (out_w, out_h) = fit_within_max_dim(lw, lh, max_dim);
-    let scaled = downscale_bgra(&raw, lw, lh, out_w, out_h);
-    let jpeg = encode_jpeg_from_bgra(&scaled, out_w, out_h, quality)?;
+    let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
+    let jpeg = encode_jpeg_from_bgra(&scaled, out_w as usize, out_h as usize, (out_w as usize) * 4, quality)?;
     Ok(CaptureResult {
         data_base64: base64::engine::general_purpose::STANDARD.encode(&jpeg),
         mime: "image/jpeg".to_string(),
@@ -391,7 +392,7 @@ pub fn start_video_stream(
                         }
                     }
                     if let Ok(raw) = capture_rect_bgra(ox, oy, lw, lh) {
-                        let scaled = downscale_bgra(&raw, lw, lh, out_w, out_h);
+                        let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
                         let yuv = YUVBuffer::from_bgra8_source(BgraSliceU8::new(
                             &scaled,
                             (out_w as usize, out_h as usize),
