@@ -16,7 +16,7 @@ use x11rb::protocol::xproto::{
     self, AtomEnum, ConnectionExt as _, ImageFormat, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT,
     KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
 };
-use x11rb::protocol::xtest::{self, ConnectionExt as _};
+use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 use crate::browser::{discover_browser, resolve_binary};
@@ -319,7 +319,7 @@ pub fn capture_jpeg(
     let raw = capture_x11_bgra(&conn, drawable, req_x, req_y, lw as u16, lh as u16)?;
     let (out_w, out_h) = fit_within_max_dim(lw, lh, max_dim);
     let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
-    let jpeg = encode_jpeg_from_bgra(&scaled, out_w as usize, out_h as usize, (out_w as usize) * 4, quality)?;
+    let jpeg = encode_jpeg_from_bgra(&scaled, out_w, out_h, (out_w as usize) * 4, quality)?;
     Ok(CaptureResult {
         data_base64: base64::engine::general_purpose::STANDARD.encode(&jpeg),
         mime: "image/jpeg".to_string(),

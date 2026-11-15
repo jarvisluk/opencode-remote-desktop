@@ -260,7 +260,7 @@ pub fn capture_jpeg(
     let raw = capture_rect_bgra(ox, oy, lw, lh)?;
     let (out_w, out_h) = fit_within_max_dim(lw, lh, max_dim);
     let scaled = downscale_bgra(&raw, lw as usize, lh as usize, (lw as usize) * 4, out_w as usize, out_h as usize);
-    let jpeg = encode_jpeg_from_bgra(&scaled, out_w as usize, out_h as usize, (out_w as usize) * 4, quality)?;
+    let jpeg = encode_jpeg_from_bgra(&scaled, out_w, out_h, (out_w as usize) * 4, quality)?;
     Ok(CaptureResult {
         data_base64: base64::engine::general_purpose::STANDARD.encode(&jpeg),
         mime: "image/jpeg".to_string(),
