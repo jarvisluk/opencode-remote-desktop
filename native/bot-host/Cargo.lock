@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "bot-host"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "apple-cf",
