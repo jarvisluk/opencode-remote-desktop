@@ -1,42 +1,32 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { existsSync } from "node:fs"
-import path from "node:path"
-import { createInterface } from "node:readline"
-import { fileURLToPath } from "node:url"
 import type { SupportedLocale } from "../i18n/locale.ts"
-import { buildFfmpegArgs, findFfmpeg, pickStreamBackend, type BackendProbe, type StreamBackendPreference } from "./ffmpeg.ts"
-
-const binDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
-
-export function binaryPath(name: string): string {
-  const ext = process.platform === "win32" ? ".exe" : ""
-  return path.join(binDir, `${name}-${process.platform}-${process.arch}${ext}`)
-}
-
-function binary(name: string): string {
-  return binaryPath(name)
-}
+import { hostClient, resolveHostBinary } from "../host/client.ts"
+import {
+  buildFfmpegArgs,
+  findFfmpeg,
+  pickStreamBackend,
+  type BackendProbe,
+  type StreamBackendPreference,
+} from "./ffmpeg.ts"
 
 export interface StreamOptions {
   readonly iceServers: readonly string[]
   readonly fps: number
   readonly bitrate: number
   readonly maxDimension: number
-  /** Capture backend selection. Default: "auto" (native on macOS, ffmpeg elsewhere). */
+  /** Capture backend selection. Default: "auto" (native bot-host when available, ffmpeg fallback). */
   readonly backend?: StreamBackendPreference
   /** Optional override of the ffmpeg capture-source args (everything before the scale filter). */
   readonly ffmpegInputArgs?: readonly string[]
 }
 
-type Pending = { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }
-
-/** Owns the bot-stream sidecar (WebRTC) and talks to it over JSON lines. */
+/**
+ * Coordinates live WebRTC streaming through the resident `bot-host` daemon.
+ * Preserves the legacy `StreamSidecar` surface for plugin RPC and diagnostics.
+ */
 export class StreamSidecar {
-  private proc: ChildProcessWithoutNullStreams | null = null
-  private nextId = 1
-  private pending = new Map<number, Pending>()
   private inputEnabled = true
   private readonly options: StreamOptions
+  private readonly sessions = new Set<string>()
 
   constructor(options: StreamOptions) {
     this.options = options
@@ -46,94 +36,106 @@ export class StreamSidecar {
     return this.probe().backend !== null
   }
 
-  /** Probes the chosen capture backend (native binaries vs ffmpeg on PATH). */
-  static probe(options: Pick<StreamOptions, "backend" | "ffmpegInputArgs"> & { locale?: SupportedLocale } = {}): BackendProbe {
+  /** Probes the chosen capture backend (native `bot-host` vs ffmpeg on PATH). */
+  static probe(
+    options: Pick<StreamOptions, "backend" | "ffmpegInputArgs"> & { locale?: SupportedLocale } = {},
+  ): BackendProbe {
+    const hasHost = resolveHostBinary() !== null
+    const pref = options.backend ?? "auto"
+    // `bot-host` now provides native capture + H.264 + WebRTC across macOS, Windows, and Linux.
+    if (pref === "auto" && hasHost) {
+      return { backend: "native" }
+    }
     return pickStreamBackend(
       {
-        preference: options.backend ?? "auto",
+        preference: pref,
         platform: process.platform,
-        nativeBinariesAvailable: existsSync(binary("bot-stream")) && existsSync(binary("bot-capture")),
+        nativeBinariesAvailable: hasHost,
         ffmpegPath: findFfmpeg(),
       },
       options.locale,
     )
   }
 
-  private ensure(): ChildProcessWithoutNullStreams {
-    if (this.proc) return this.proc
+  async offer(sdp: string, target?: string): Promise<{ sdp: string; session: string }> {
     const probe = StreamSidecar.probe(this.options)
-    if (!probe.backend) throw new Error(probe.reason ?? "no stream backend available")
-    const args = ["--ice", this.options.iceServers.join(","), "--fps", String(this.options.fps)]
-    if (probe.backend === "native") {
-      args.push("--capture", binary("bot-capture"), "--bitrate", String(this.options.bitrate), "--max-dim", String(this.options.maxDimension))
-    } else {
-      const cmd = [probe.ffmpegPath ?? "ffmpeg", ...buildFfmpegArgs({
+    if (!probe.backend) {
+      throw new Error(probe.reason ?? "no stream backend available")
+    }
+    if (!hostClient.available()) {
+      throw new Error(probe.reason ?? "bot-host binary missing")
+    }
+
+    const iceServers = this.options.iceServers
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .map((url) => ({ urls: [url] }))
+
+    const ffmpegCmd =
+      probe.backend === "ffmpeg"
+        ? [
+            probe.ffmpegPath ?? "ffmpeg",
+            ...buildFfmpegArgs({
+              fps: this.options.fps,
+              bitrate: this.options.bitrate,
+              maxDimension: this.options.maxDimension,
+              platform: process.platform,
+              inputArgs: this.options.ffmpegInputArgs,
+            }),
+          ]
+        : undefined
+
+    const res = await hostClient.request<{ sdp: string; session: string }>(
+      "stream.offer",
+      {
+        sdp,
+        ...(target ? { target } : {}),
         fps: this.options.fps,
         bitrate: this.options.bitrate,
-        maxDimension: this.options.maxDimension,
-        platform: process.platform,
-        inputArgs: this.options.ffmpegInputArgs,
-      })]
-      args.push("--raw-cmd", JSON.stringify(cmd))
+        maxDim: this.options.maxDimension,
+        ...(iceServers.length ? { iceServers } : {}),
+        ...(ffmpegCmd ? { ffmpegCmd } : {}),
+      },
+      { timeoutMs: 20_000 },
+    )
+
+    if (!this.inputEnabled) {
+      await hostClient.request("stream.setInput", { enabled: false }).catch(() => {})
     }
-    const proc = spawn(binary("bot-stream"), args)
-    proc.stderr.on("data", (d) => process.stderr.write(d))
-    createInterface({ input: proc.stdout }).on("line", (line) => {
-      let msg: Record<string, unknown>
-      try {
-        msg = JSON.parse(line)
-      } catch {
-        return
-      }
-      const p = this.pending.get(msg.id as number)
-      if (!p) return
-      this.pending.delete(msg.id as number)
-      if (msg.t === "error") p.reject(new Error(String(msg.message)))
-      else p.resolve(msg)
-    })
-    proc.on("exit", () => {
-      this.proc = null
-      for (const p of this.pending.values()) p.reject(new Error("stream sidecar exited"))
-      this.pending.clear()
-    })
-    this.proc = proc
-    if (!this.inputEnabled) proc.stdin.write(JSON.stringify({ t: "input", enabled: false }) + "\n")
-    return proc
-  }
-
-  private request(msg: Record<string, unknown>, timeoutMs = 15_000): Promise<Record<string, unknown>> {
-    const proc = this.ensure()
-    const id = this.nextId++
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error("stream sidecar timed out"))
-      }, timeoutMs)
-      this.pending.set(id, {
-        resolve: (v) => (clearTimeout(timer), resolve(v)),
-        reject: (e) => (clearTimeout(timer), reject(e)),
-      })
-      proc.stdin.write(JSON.stringify({ ...msg, id }) + "\n")
-    })
-  }
-
-  async offer(sdp: string): Promise<{ sdp: string; session: string }> {
-    const res = await this.request({ t: "offer", sdp })
+    if (res.session) {
+      this.sessions.add(res.session)
+      hostClient.trackStreamOpen()
+    }
     return { sdp: String(res.sdp), session: String(res.session) }
   }
 
-  async close(session: string): Promise<void> {
-    if (this.proc) await this.request({ t: "close", session })
+  async retarget(session: string, target: string): Promise<void> {
+    if (!hostClient.available()) return
+    await hostClient.request("stream.retarget", { session, target })
   }
 
-  /** Gates DataChannel input from every viewer; only sent once the sidecar is running, which starts enabled. */
+  async close(session: string): Promise<void> {
+    if (this.sessions.delete(session)) {
+      hostClient.trackStreamClose()
+    }
+    if (hostClient.available()) {
+      await hostClient.request("stream.close", { session }).catch(() => {})
+    }
+  }
+
+  /** Gates DataChannel input from every viewer while the agent owns the screen. */
   async setInput(enabled: boolean): Promise<void> {
     this.inputEnabled = enabled
-    if (this.proc) await this.request({ t: "input", enabled })
+    if (hostClient.available() && this.sessions.size > 0) {
+      await hostClient.request("stream.setInput", { enabled }).catch(() => {})
+    }
   }
 
   dispose(): void {
-    this.proc?.kill()
-    this.proc = null
+    for (const session of [...this.sessions]) {
+      this.sessions.delete(session)
+      hostClient.trackStreamClose()
+      void hostClient.request("stream.close", { session }).catch(() => {})
+    }
   }
 }

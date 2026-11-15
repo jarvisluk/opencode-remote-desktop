@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { hostClient } from "../host/client.ts"
 import { resolveBinary, runCommand } from "./exec.ts"
 
 export interface HostBrowserEndpoint {
-  readonly browser: "Microsoft Edge" | "Google Chrome"
+  readonly browser: string
   readonly wsUrl: string
 }
 
@@ -24,6 +25,24 @@ const DEVTOOLS_PORT_FILES: ReadonlyArray<{
 ]
 
 export async function discoverHostCdpEndpoint(): Promise<HostBrowserEndpoint | null> {
+  if (hostClient.available()) {
+    try {
+      const res = await hostClient.request<{
+        browserName?: string | null
+        cdpWsUrl?: string | null
+      }>("browser.discover", {}, { timeoutMs: 3_000 })
+      if (res?.cdpWsUrl) {
+        return {
+          browser: res.browserName || "Host Browser",
+          wsUrl: res.cdpWsUrl,
+        }
+      }
+      return null
+    } catch {
+      // Fall through to local DevToolsActivePort scan.
+    }
+  }
+
   for (const candidate of DEVTOOLS_PORT_FILES) {
     if (!existsSync(candidate.path)) continue
     try {
@@ -64,7 +83,7 @@ export class MacBrowserController {
     const bin = resolveBinary("agent-browser")
     if (!bin) {
       throw new Error(
-        "agent-browser is not installed on this macOS server. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
+        "agent-browser is not installed on this host. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
       )
     }
 
@@ -77,7 +96,7 @@ export class MacBrowserController {
       return {
         mode: "isolated-fallback",
         warning:
-          "No DevToolsActivePort found for Microsoft Edge or Chrome; running in standalone agent-browser session. Enable edge://inspect/#remote-debugging on the Mac to reuse signed-in tabs.",
+          "No DevToolsActivePort found for Microsoft Edge or Chrome; running in standalone agent-browser session. Enable edge://inspect/#remote-debugging on the host to reuse signed-in tabs.",
       }
     }
 
@@ -110,7 +129,7 @@ export class MacBrowserController {
       return {
         ok: false,
         output:
-          "agent-browser binary not found on macOS PATH. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
+          "agent-browser binary not found on PATH. Install it with `npm install -g agent-browser && agent-browser install` (or `brew install agent-browser`).",
         mode: "missing",
       }
     }

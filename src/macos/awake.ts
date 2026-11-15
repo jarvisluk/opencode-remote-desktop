@@ -1,11 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { KeepAwakeMode } from "../options.ts"
+import { hostClient } from "../host/client.ts"
 import { resolveBinary } from "./exec.ts"
 
 export class KeepAwakeController {
   private proc: ChildProcess | null = null
   private mode: KeepAwakeMode
   private activeCount = 0
+  private hostActive = false
 
   constructor(mode: KeepAwakeMode) {
     this.mode = mode
@@ -13,6 +15,9 @@ export class KeepAwakeController {
   }
 
   get isActive(): boolean {
+    if (hostClient.available()) {
+      return this.hostActive
+    }
     return this.proc !== null && this.proc.exitCode === null && !this.proc.killed
   }
 
@@ -39,8 +44,15 @@ export class KeepAwakeController {
   }
 
   private reconcile(): void {
-    if (process.platform !== "darwin") return
     const shouldRun = this.mode === "always" || (this.mode === "active" && this.activeCount > 0)
+    if (hostClient.available()) {
+      if (shouldRun !== this.hostActive) {
+        this.hostActive = shouldRun
+        void hostClient.setKeepAwake(shouldRun).catch(() => {})
+      }
+      return
+    }
+    if (process.platform !== "darwin") return
     if (shouldRun && !this.isActive) {
       this.start()
     } else if (!shouldRun && this.isActive) {
@@ -51,8 +63,6 @@ export class KeepAwakeController {
   private start(): void {
     const bin = resolveBinary("caffeinate")
     if (!bin) return
-    // -d prevents display sleep (needed for macOS Screen Recording), -i prevents idle system sleep,
-    // -w binds lifetime to Node parent process PID so caffeinate exits automatically on parent exit/crash.
     const child = spawn(bin, ["-di", "-w", String(process.pid)], {
       stdio: "ignore",
       detached: false,
@@ -65,6 +75,10 @@ export class KeepAwakeController {
   }
 
   private stop(): void {
+    if (hostClient.available() && this.hostActive) {
+      this.hostActive = false
+      void hostClient.setKeepAwake(false).catch(() => {})
+    }
     if (!this.proc) return
     try {
       this.proc.kill("SIGTERM")

@@ -1,4 +1,5 @@
 import { resolveBinary, runCommand } from "./macos/exec.ts"
+import { resolveHostBinary } from "./host/client.ts"
 import { getMacDesktopStatus } from "./macos/desktop.ts"
 import { StreamSidecar } from "./stream/sidecar.ts"
 import { resolveLocale, type SupportedLocale } from "./i18n/locale.ts"
@@ -37,7 +38,7 @@ export interface DiagnosticsPermissions {
 }
 
 export interface StreamBackendInfo {
-  /** "native" = bot-capture (framed contract), "ffmpeg" = raw Annex-B pipe, null = unavailable. */
+  /** "native" = bot-host (Rust WebRTC + native capture), "ffmpeg" = raw Annex-B pipe, null = unavailable. */
   readonly backend: "native" | "ffmpeg" | null
   /** Set when backend is null. */
   readonly reason?: string
@@ -113,7 +114,7 @@ export async function collectDiagnostics(
     : []
 
   let permissions: DiagnosticsPermissions | null = null
-  if (isMac && dependencies[0]?.installed) {
+  if (isMac && (dependencies[0]?.installed || resolveHostBinary() !== null)) {
     // TCC permission states are macOS-only; on other platforms getMacDesktopStatus
     // reports "unsupported" and must not be treated as a permission problem.
     const status = await getMacDesktopStatus(signal).catch(() => null)

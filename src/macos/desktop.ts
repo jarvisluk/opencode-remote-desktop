@@ -1,18 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { existsSync } from "node:fs"
+import { spawn } from "node:child_process"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { randomUUID } from "node:crypto"
+import { hostClient } from "../host/client.ts"
 import { resolveBinary, runCommand } from "./exec.ts"
-
-const nativeBinDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/bin")
-
-function nativeBinaryPath(name: string): string {
-  const ext = process.platform === "win32" ? ".exe" : ""
-  return join(nativeBinDir, `${name}-${process.platform}-${process.arch}${ext}`)
-}
 
 import { REMOTE_INPUT_KINDS, type RemoteInputKind } from "../input-types.ts"
 export { REMOTE_INPUT_KINDS, type RemoteInputKind }
@@ -75,6 +67,47 @@ function parseJsonSafe(raw: string): any {
 }
 
 export async function getMacDesktopStatus(signal?: AbortSignal): Promise<MacDesktopStatus> {
+  if (hostClient.available()) {
+    try {
+      const status = await hostClient.request<{
+        platform: string
+        supported: boolean
+        accessibility: string
+        screenRecording: string
+        agentDesktopBin?: string | null
+        displays?: Array<{
+          id: string
+          x: number
+          y: number
+          width: number
+          height: number
+          scale: number
+          isPrimary: boolean
+        }>
+      }>("host.status", {}, { timeoutMs: 8_000, signal })
+      return {
+        platform: status.platform,
+        supported: status.supported,
+        agentDesktopInstalled: Boolean(status.agentDesktopBin || resolveBinary("agent-desktop")),
+        accessibility: String(status.accessibility ?? "unknown"),
+        screenRecording: String(status.screenRecording ?? "unknown"),
+        displays: (status.displays ?? []).map((d) => ({
+          id: String(d.id ?? "0"),
+          isPrimary: Boolean(d.isPrimary),
+          scale: typeof d.scale === "number" && d.scale > 0 ? d.scale : 1,
+          bounds: {
+            x: Number(d.x ?? 0),
+            y: Number(d.y ?? 0),
+            width: Number(d.width ?? 1920),
+            height: Number(d.height ?? 1080),
+          },
+        })),
+      }
+    } catch {
+      // Fall through to CLI fallback on macOS or unsupported elsewhere.
+    }
+  }
+
   if (process.platform !== "darwin") {
     return {
       platform: process.platform,
@@ -124,6 +157,40 @@ export async function listDisplays(signal?: AbortSignal, forceRefresh = false): 
   if (!forceRefresh && cachedDisplays && now - cachedDisplays.timestamp < DISPLAYS_CACHE_TTL_MS) {
     return cachedDisplays.data
   }
+
+  if (hostClient.available()) {
+    try {
+      const rows = await hostClient.request<
+        Array<{
+          id: string
+          x: number
+          y: number
+          width: number
+          height: number
+          scale: number
+          isPrimary: boolean
+        }>
+      >("display.list", {}, { timeoutMs: 5_000, signal })
+      if (Array.isArray(rows)) {
+        const displays: MacDisplayInfo[] = rows.map((d) => ({
+          id: String(d.id ?? "0"),
+          isPrimary: Boolean(d.isPrimary),
+          scale: typeof d.scale === "number" && d.scale > 0 ? d.scale : 1,
+          bounds: {
+            x: Number(d.x ?? 0),
+            y: Number(d.y ?? 0),
+            width: Number(d.width ?? 1920),
+            height: Number(d.height ?? 1080),
+          },
+        }))
+        cachedDisplays = { data: displays, timestamp: Date.now() }
+        return displays
+      }
+    } catch {
+      // Fall through to agent-desktop CLI
+    }
+  }
+
   const bin = resolveBinary("agent-desktop")
   if (!bin) return []
   const res = await runCommand(bin, ["list-displays"], { timeoutMs: 8_000, signal })
@@ -178,12 +245,38 @@ export async function listWindows(app?: string, signal?: AbortSignal, forceRefre
       }))
 
   const task = (async () => {
-    if (process.platform === "darwin") {
+    if (hostClient.available()) {
       try {
-        const res = await snapServer.request({ cmd: "list-windows", app: app || undefined, signal }, 1_500)
-        const rows = JSON.parse(res.jpegBuffer.toString("utf8"))
+        const rows = await hostClient.request<
+          Array<{
+            id: string
+            app: string
+            title: string
+            x: number
+            y: number
+            width: number
+            height: number
+            displayId?: string | null
+            focused: boolean
+          }>
+        >("window.list", app ? { app } : {}, { timeoutMs: 3_000, signal })
         if (Array.isArray(rows)) {
-          const windows = mapRawWindows(rows)
+          const windows: MacWindowInfo[] = rows
+            .filter((w) => w.app !== "WindowManager" && Number(w.width ?? 0) >= 80)
+            .map((w) => ({
+              id: String(w.id ?? ""),
+              appName: String(w.app ?? ""),
+              title: String(w.title ?? ""),
+              isFocused: Boolean(w.focused),
+              visible: true,
+              accessible: true,
+              bounds: {
+                x: Number(w.x ?? 0),
+                y: Number(w.y ?? 0),
+                width: Number(w.width ?? 0),
+                height: Number(w.height ?? 0),
+              },
+            }))
           cachedWindows.set(key, { data: windows, timestamp: Date.now() })
           return windows
         }
@@ -191,6 +284,7 @@ export async function listWindows(app?: string, signal?: AbortSignal, forceRefre
         // Fall through to agent-desktop CLI
       }
     }
+
     const bin = resolveBinary("agent-desktop")
     if (!bin) return []
     const args = ["list-windows"]
@@ -276,229 +370,8 @@ async function readImageDimensions(filePath: string, jpegBuffer?: Buffer, signal
 // In-flight capture singleflight map to avoid duplicate external process calls
 const inFlightCaptures = new Map<string, Promise<CapturedFrame>>()
 
-interface SnapPending {
-  resolve: (frame: CapturedFrame) => void
-  reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
-
-class SnapServerClient {
-  private proc: ChildProcessWithoutNullStreams | null = null
-  private readyPromise: Promise<void> | null = null
-  private nextId = 1
-  private buf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
-  private pending = new Map<number, SnapPending>()
-  private idleTimer: ReturnType<typeof setTimeout> | undefined
-  private disabled = false
-
-  private resetIdle() {
-    clearTimeout(this.idleTimer)
-    if (this.pending.size > 0) {
-      this.proc?.ref()
-      return
-    }
-    this.proc?.unref()
-    ;(this.proc?.stdout as any)?.unref?.()
-    ;(this.proc?.stderr as any)?.unref?.()
-    ;(this.proc?.stdin as any)?.unref?.()
-    this.idleTimer = setTimeout(() => this.dispose(), 60_000)
-    this.idleTimer.unref?.()
-  }
-
-  private failAll(reason: string) {
-    for (const [id, req] of this.pending) {
-      clearTimeout(req.timer)
-      req.reject(new Error(reason))
-      this.pending.delete(id)
-    }
-  }
-
-  private ensureStarted(): Promise<void> {
-    if (this.disabled) return Promise.reject(new Error("snap-server disabled"))
-    if (this.readyPromise) return this.readyPromise
-    const bin = nativeBinaryPath("bot-capture")
-    if (!existsSync(bin)) return Promise.reject(new Error("bot-capture missing"))
-
-    this.readyPromise = new Promise<void>((resolve, reject) => {
-      const child = spawn(bin, ["--snap-server"], { stdio: ["pipe", "pipe", "pipe"] })
-      this.proc = child
-      this.buf = Buffer.alloc(0)
-      let settled = false
-      let errTail = ""
-
-      const bootTimer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        this.dispose()
-        reject(new Error(`snap-server startup timeout${errTail ? `: ${errTail}` : ""}`))
-      }, 3_000)
-
-      child.stderr.on("data", (chunk: Buffer) => {
-        errTail = (errTail + chunk.toString("utf8")).slice(-512)
-        if (!settled && errTail.includes("snap-ready")) {
-          settled = true
-          clearTimeout(bootTimer)
-          resolve()
-        }
-      })
-
-      child.stdout.on("data", (chunk: Buffer) => {
-        this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk
-        while (this.buf.length >= 33) {
-          const payloadLen = this.buf.readUInt32BE(28)
-          if (this.buf.length < 33 + payloadLen) break
-          const id = this.buf.readUInt32BE(0)
-          const imageWidth = this.buf.readUInt32BE(4)
-          const imageHeight = this.buf.readUInt32BE(8)
-          const logicalX = this.buf.readInt32BE(12)
-          const logicalY = this.buf.readInt32BE(16)
-          const logicalWidth = this.buf.readUInt32BE(20)
-          const logicalHeight = this.buf.readUInt32BE(24)
-          const status = this.buf.readUInt8(32)
-          const payload = Buffer.allocUnsafe(payloadLen)
-          this.buf.copy(payload, 0, 33, 33 + payloadLen)
-          this.buf = this.buf.subarray(33 + payloadLen)
-
-          const req = this.pending.get(id)
-          if (!req) continue
-          this.pending.delete(id)
-          clearTimeout(req.timer)
-          this.resetIdle()
-          if (status !== 0) {
-            req.reject(new Error(payload.toString("utf8") || "snap-server capture failed"))
-          } else {
-            req.resolve({
-              jpegPath: "",
-              jpegBuffer: payload,
-              imageWidth,
-              imageHeight,
-              logicalX,
-              logicalY,
-              logicalWidth,
-              logicalHeight,
-              timestamp: Date.now(),
-            })
-          }
-        }
-      })
-
-      child.on("exit", (code) => {
-        clearTimeout(bootTimer)
-        if (this.proc === child) {
-          this.proc = null
-          this.readyPromise = null
-        }
-        if (!settled) {
-          settled = true
-          if (errTail.includes("requires macOS 14")) this.disabled = true
-          reject(new Error(`snap-server exited (${code})${errTail ? `: ${errTail}` : ""}`))
-        }
-        this.failAll(`snap-server exited (${code})`)
-      })
-
-      child.on("error", (err) => {
-        clearTimeout(bootTimer)
-        if (this.proc === child) {
-          this.proc = null
-          this.readyPromise = null
-        }
-        if (!settled) {
-          settled = true
-          reject(err)
-        }
-        this.failAll(err.message)
-      })
-    })
-    return this.readyPromise
-  }
-
-  async request(
-    payload: Record<string, unknown> & { readonly signal?: AbortSignal },
-    timeoutMs = 10_000,
-  ): Promise<CapturedFrame> {
-    await this.ensureStarted()
-    const proc = this.proc
-    if (!proc || proc.killed) throw new Error("snap-server not running")
-    clearTimeout(this.idleTimer)
-
-    const id = this.nextId++
-    if (this.nextId > 0x7fff_ff00) this.nextId = 1
-    const { signal, ...rest } = payload
-    proc.ref()
-    ;(proc.stdout as any)?.ref?.()
-    ;(proc.stderr as any)?.ref?.()
-
-    return new Promise<CapturedFrame>((resolve, reject) => {
-      const onAbort = () => {
-        const req = this.pending.get(id)
-        if (req) {
-          clearTimeout(req.timer)
-          this.pending.delete(id)
-          this.resetIdle()
-        }
-        reject(new Error("Screenshot aborted"))
-      }
-      if (signal?.aborted) return onAbort()
-
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        signal?.removeEventListener("abort", onAbort)
-        this.dispose()
-        reject(new Error("snap-server request timeout"))
-      }, timeoutMs)
-
-      this.pending.set(id, {
-        resolve: (frame) => {
-          signal?.removeEventListener("abort", onAbort)
-          resolve(frame)
-        },
-        reject: (err) => {
-          signal?.removeEventListener("abort", onAbort)
-          reject(err)
-        },
-        timer,
-      })
-      signal?.addEventListener("abort", onAbort, { once: true })
-
-      const line = JSON.stringify({ id, ...rest })
-      proc.stdin.write(`${line}\n`)
-    })
-  }
-
-  async capture(options?: {
-    readonly windowId?: string
-    readonly app?: string
-    readonly screenIndex?: number
-    readonly maxDimension?: number
-    readonly quality?: number
-    readonly signal?: AbortSignal
-  }): Promise<CapturedFrame> {
-    return this.request({
-      screen: options?.screenIndex ?? 0,
-      maxDim: options?.maxDimension ?? 1440,
-      quality: options?.quality ?? 72,
-      ...(options?.windowId ? { windowId: options.windowId } : {}),
-      ...(options?.app ? { app: options.app } : {}),
-      signal: options?.signal,
-    })
-  }
-
-  dispose() {
-    clearTimeout(this.idleTimer)
-    this.idleTimer = undefined
-    const p = this.proc
-    this.proc = null
-    this.readyPromise = null
-    if (p && !p.killed) p.kill("SIGTERM")
-    this.failAll("snap-server disposed")
-  }
-}
-
-const snapServer = new SnapServerClient()
-process.once("exit", () => snapServer.dispose())
-
 export function disposeDesktopHelpers(): void {
-  snapServer.dispose()
+  hostClient.dispose()
 }
 
 export async function captureScreenJpeg(options?: {
@@ -540,26 +413,71 @@ async function doCaptureScreenJpeg(options?: {
   readonly keepFile?: boolean
   readonly signal?: AbortSignal
 }): Promise<CapturedFrame> {
-  // Fast path: resident ScreenCaptureKit in-memory JPEG encoder (~45 ms/frame, zero disk I/O).
-  if (process.platform === "darwin") {
+  const maxDimension = options?.maxDimension ?? 1440
+  const quality = options?.quality ?? 72
+  const signal = options?.signal
+
+  // Fast path: resident Rust `bot-host` in-memory JPEG capture across macOS, Windows, and Linux.
+  if (hostClient.available()) {
     try {
-      const fast = await snapServer.capture(options)
+      const target = options?.windowId
+        ? options.windowId
+        : options?.app
+          ? `app:${options.app}`
+          : `screen:${options?.screenIndex ?? 0}`
+      const res = await hostClient.request<{
+        jpegBase64: string
+        imageWidth: number
+        imageHeight: number
+        logicalX: number
+        logicalY: number
+        logicalWidth: number
+        logicalHeight: number
+      }>(
+        "screen.capture",
+        {
+          target,
+          screen: options?.screenIndex ?? 0,
+          ...(options?.windowId ? { windowId: options.windowId } : {}),
+          ...(options?.app ? { app: options.app } : {}),
+          maxDim: maxDimension,
+          quality,
+        },
+        { timeoutMs: 12_000, signal },
+      )
+      const jpegBuffer = Buffer.from(res.jpegBase64, "base64")
+      let jpegPath = ""
       if (options?.keepFile) {
         const dir = getTempCaptureDir()
         await mkdir(dir, { recursive: true })
-        const outJpg = join(dir, `${randomUUID()}.jpg`)
-        await writeFile(outJpg, fast.jpegBuffer)
-        return { ...fast, jpegPath: outJpg }
+        jpegPath = join(dir, `${randomUUID()}.jpg`)
+        await writeFile(jpegPath, jpegBuffer)
       }
-      return fast
+      return {
+        jpegPath,
+        jpegBuffer,
+        imageWidth: res.imageWidth,
+        imageHeight: res.imageHeight,
+        logicalX: res.logicalX,
+        logicalY: res.logicalY,
+        logicalWidth: res.logicalWidth,
+        logicalHeight: res.logicalHeight,
+        timestamp: Date.now(),
+      }
     } catch (err: any) {
-      // Surface missing window errors immediately instead of running a redundant fallback process.
+      if (signal?.aborted) throw err
       if (typeof err?.message === "string" && err.message.includes("Window not found")) {
-        throw new Error(`Window not found for screenshot: ${options?.windowId ? `id=${options.windowId}` : `app=${options?.app}`}`)
+        throw new Error(
+          `Window not found for screenshot: ${options?.windowId ? `id=${options.windowId}` : `app=${options?.app}`}`,
+        )
       }
-      // Fall back to agent-desktop/screencapture + sips if bot-capture is unavailable or aborted.
-      if (options?.signal?.aborted) throw err
+      if (process.platform !== "darwin") throw err
+      // Fall back to agent-desktop / screencapture + sips on macOS if bot-host capture fails.
     }
+  }
+
+  if (process.platform !== "darwin") {
+    throw new Error("bot-host binary is required for desktop capture on this platform")
   }
 
   const dir = getTempCaptureDir()
@@ -567,11 +485,7 @@ async function doCaptureScreenJpeg(options?: {
   const id = randomUUID()
   const rawPng = join(dir, `${id}.png`)
   const outJpg = join(dir, `${id}.jpg`)
-  const maxDimension = options?.maxDimension ?? 1440
-  const quality = options?.quality ?? 72
-  const signal = options?.signal
 
-  // Determine fallback bounds from primary display instead of hardcoded 1920x1080
   const displays = await listDisplays(signal)
   const primaryDisplay = displays.find((d) => d.isPrimary) ?? displays[0]
   let logicalBounds: DisplayBounds = primaryDisplay?.bounds ?? { x: 0, y: 0, width: 1920, height: 1080 }
@@ -586,7 +500,6 @@ async function doCaptureScreenJpeg(options?: {
       if (matched && matched.bounds.width > 0 && matched.bounds.height > 0) {
         logicalBounds = matched.bounds
       } else if (options.windowId || options.app) {
-        // Issue 3: If an app or windowId was explicitly requested but not found, throw error instead of using wrong bounds
         throw new Error(`Window not found for screenshot: ${options.windowId ? `id=${options.windowId}` : `app=${options.app}`}`)
       }
 
@@ -611,7 +524,6 @@ async function doCaptureScreenJpeg(options?: {
           signal,
         })
         if (shot.code !== 0) {
-          // Fallback to macOS native screencapture
           const sc = await runCommand("screencapture", ["-x", "-D", String(idx + 1), rawPng], {
             timeoutMs: 12_000,
             signal,
@@ -631,7 +543,6 @@ async function doCaptureScreenJpeg(options?: {
       }
     }
 
-    // Resize & compress PNG -> JPEG using built-in macOS `sips`
     const sipsArgs = [
       "-Z",
       String(maxDimension),
@@ -713,6 +624,59 @@ function formatCoordPair(x: number, y: number): string {
   return `--xy=${Math.round(x)},${Math.round(y)}`
 }
 
+function parseKeyCombo(combo: string): {
+  key: string
+  shift: boolean
+  ctrl: boolean
+  alt: boolean
+  meta: boolean
+} {
+  const parts = combo
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean)
+  let shift = false
+  let ctrl = false
+  let alt = false
+  let meta = false
+  let key = ""
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]
+    const lower = p.toLowerCase()
+    if (i < parts.length - 1) {
+      if (lower === "shift") { shift = true; continue }
+      if (lower === "ctrl" || lower === "control") { ctrl = true; continue }
+      if (lower === "alt" || lower === "option" || lower === "opt") { alt = true; continue }
+      if (lower === "cmd" || lower === "command" || lower === "meta" || lower === "super" || lower === "win") {
+        meta = true
+        continue
+      }
+    }
+    key = p
+  }
+  return { key, shift, ctrl, alt, meta }
+}
+
+const KEY_ALIAS_TO_WEB: Record<string, string> = {
+  return: "Enter",
+  enter: "Enter",
+  esc: "Escape",
+  escape: "Escape",
+  tab: "Tab",
+  space: " ",
+  backspace: "Backspace",
+  delete: "Delete",
+  del: "Delete",
+  up: "ArrowUp",
+  down: "ArrowDown",
+  left: "ArrowLeft",
+  right: "ArrowRight",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+}
+
 export async function injectRemoteInput(
   input: {
     readonly kind: RemoteInputKind
@@ -728,6 +692,21 @@ export async function injectRemoteInput(
   if (input.kind === "click" || input.kind === "double_click" || input.kind === "right_click") {
     if (typeof input.x !== "number" || typeof input.y !== "number") {
       return { ok: false, detail: "Missing x/y coordinates" }
+    }
+    if (hostClient.available()) {
+      try {
+        const button = input.kind === "right_click" ? "right" : "left"
+        const repeats = input.kind === "double_click" ? 2 : 1
+        for (let i = 0; i < repeats; i++) {
+          await hostClient.request("input.inject", { kind: "down", x: input.x, y: input.y, button }, { timeoutMs: 5_000, signal })
+          await hostClient.request("input.inject", { kind: "up", x: input.x, y: input.y, button }, { timeoutMs: 5_000, signal })
+        }
+        return { ok: true, detail: `${input.kind} at (${Math.round(input.x)}, ${Math.round(input.y)})` }
+      } catch (err: any) {
+        if (signal?.aborted || process.platform !== "darwin") {
+          return { ok: false, detail: err?.message ?? "input injection failed" }
+        }
+      }
     }
     const args = ["mouse-click", formatCoordPair(input.x, input.y)]
     if (input.kind === "right_click") args.push("--button", "right")
@@ -748,6 +727,17 @@ export async function injectRemoteInput(
       const clamped = Math.max(-20, Math.min(20, input.deltaY))
       dy = clamped > 0 ? Math.max(1, Math.round(clamped)) : Math.min(-1, Math.round(clamped))
     }
+    if (hostClient.available()) {
+      try {
+        await hostClient.request("input.inject", { kind: "move", x, y }, { timeoutMs: 5_000, signal })
+        await hostClient.request("input.inject", { kind: "wheel", x, y, dy: -dy * 18 }, { timeoutMs: 5_000, signal })
+        return { ok: true, detail: `Scrolled dy=${dy}` }
+      } catch (err: any) {
+        if (signal?.aborted || process.platform !== "darwin") {
+          return { ok: false, detail: err?.message ?? "scroll failed" }
+        }
+      }
+    }
     const res = await runAgentDesktop(
       ["mouse-wheel", `--x=${x}`, `--y=${y}`, `--dy=${dy}`],
       { headed: true, timeoutMs: 8_000, signal },
@@ -758,6 +748,41 @@ export async function injectRemoteInput(
   if (input.kind === "key") {
     const combo = (input.key ?? "").trim()
     if (!combo) return { ok: false, detail: "Missing key combo" }
+    if (hostClient.available() && !input.app) {
+      try {
+        const parsed = parseKeyCombo(combo)
+        const mappedKey = KEY_ALIAS_TO_WEB[parsed.key.toLowerCase()] ?? parsed.key
+        await hostClient.request(
+          "input.inject",
+          {
+            kind: "keydown",
+            key: mappedKey,
+            shift: parsed.shift,
+            ctrl: parsed.ctrl,
+            alt: parsed.alt,
+            meta: parsed.meta,
+          },
+          { timeoutMs: 5_000, signal },
+        )
+        await hostClient.request(
+          "input.inject",
+          {
+            kind: "keyup",
+            key: mappedKey,
+            shift: parsed.shift,
+            ctrl: parsed.ctrl,
+            alt: parsed.alt,
+            meta: parsed.meta,
+          },
+          { timeoutMs: 5_000, signal },
+        )
+        return { ok: true, detail: `Pressed ${combo}` }
+      } catch (err: any) {
+        if (signal?.aborted || process.platform !== "darwin") {
+          return { ok: false, detail: err?.message ?? "key injection failed" }
+        }
+      }
+    }
     const args = ["press"]
     if (input.app) args.push("--app", input.app)
     args.push(combo)
@@ -769,8 +794,17 @@ export async function injectRemoteInput(
     const text = input.text ?? ""
     if (!text) return { ok: false, detail: "Empty text" }
 
-    // Single letters and digits are plain key presses, which keeps the clipboard untouched. agent-desktop's own
-    // `type` needs an element ref and cannot target "whatever has focus".
+    if (hostClient.available() && !input.app) {
+      try {
+        await hostClient.request("input.inject", { kind: "text", text }, { timeoutMs: 8_000, signal })
+        return { ok: true, detail: `Typed ${text.length} chars` }
+      } catch (err: any) {
+        if (signal?.aborted || process.platform !== "darwin") {
+          return { ok: false, detail: err?.message ?? "text injection failed" }
+        }
+      }
+    }
+
     if (/^[a-z0-9]$/i.test(text)) {
       const key = text === text.toUpperCase() && text !== text.toLowerCase() ? `shift+${text.toLowerCase()}` : text
       const pressArgs = ["press"]
@@ -780,7 +814,6 @@ export async function injectRemoteInput(
       return { ok: res.ok, detail: res.ok ? "Typed 1 char" : res.raw }
     }
 
-    // Everything else (symbols, CJK, longer text) is pasted with Cmd+V through the system clipboard.
     const prevClip = await runCommand("/usr/bin/pbpaste", [], { timeoutMs: 4_000, signal })
     const previousText = prevClip.code === 0 && prevClip.stdout ? prevClip.stdout : null
 
@@ -795,7 +828,6 @@ export async function injectRemoteInput(
     const pasteRes = await runAgentDesktop(pasteArgs, { headed: true, timeoutMs: 6_000, signal })
 
     await new Promise((r) => setTimeout(r, 140))
-    // Only restore clipboard text if previousText was indeed string; NEVER call clipboard-clear which wipes images/files
     if (previousText !== null) {
       await pbcopy(previousText).catch(() => {})
     }

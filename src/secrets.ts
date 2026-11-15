@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { hostClient } from "./host/client.ts"
 
 export const KEYCHAIN_SERVICE = "opencode-bot"
 const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/
@@ -29,9 +30,16 @@ function keychainError(stderr: string, fallback: string): Error {
   return new Error(msg || fallback)
 }
 
-// The value travels over stdin as hex (never argv), and is stored as hex text so `-w` reads it back unambiguously.
 export async function saveSecret(name: string, value: string): Promise<void> {
   if (!isValidSecretName(name)) throw new Error(`Invalid secret name: ${name}`)
+  if (hostClient.available()) {
+    await hostClient.request("secret.set", { name, value })
+    return
+  }
+  if (process.platform !== "darwin") {
+    throw new Error("bot-host binary is required to store secrets on this platform")
+  }
+  // Fallback when bot-host is not built yet: value travels over stdin as hex (never argv).
   const hex = Buffer.from(Buffer.from(value, "utf8").toString("hex"), "utf8").toString("hex")
   const res = await security(["-i"], `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${name} -X ${hex}\n`)
   if (res.code !== 0 || res.stderr.trim()) throw keychainError(res.stderr, "Keychain write failed")
@@ -39,6 +47,11 @@ export async function saveSecret(name: string, value: string): Promise<void> {
 
 export async function readSecret(name: string): Promise<string | null> {
   if (!isValidSecretName(name)) return null
+  if (hostClient.available()) {
+    const res = await hostClient.request<{ value?: string | null }>("secret.get", { name })
+    return typeof res?.value === "string" ? res.value : null
+  }
+  if (process.platform !== "darwin") return null
   const res = await security(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"])
   if (res.code !== 0) {
     if (/could not be found|-25300/i.test(res.stderr)) return null
@@ -49,6 +62,11 @@ export async function readSecret(name: string): Promise<string | null> {
 
 export async function deleteSecret(name: string): Promise<boolean> {
   if (!isValidSecretName(name)) return false
+  if (hostClient.available()) {
+    const res = await hostClient.request<{ deleted?: boolean }>("secret.delete", { name })
+    return Boolean(res?.deleted)
+  }
+  if (process.platform !== "darwin") return false
   const res = await security(["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name])
   return res.code === 0
 }

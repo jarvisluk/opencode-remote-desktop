@@ -50,11 +50,10 @@ const rebuildNative = () => {
   }, 300)
 }
 if (!existsSync(path.join(root, "dist/bin"))) rebuildNative()
-for (const dir of ["native/stream", "native/capture-macos"]) {
-  watch(path.join(root, dir), (_event, file) => {
-    if (file && /\.(go|swift|mod|sum)$/.test(file)) rebuildNative()
-  })
-}
+watch(path.join(root, "native/bot-host/src"), { recursive: true }, (_event, file) => {
+  if (file && /\.(rs|toml)$/.test(file)) rebuildNative()
+})
+watch(path.join(root, "native/bot-host/Cargo.toml"), () => rebuildNative())
 
 const bin = findOpencode()
 console.log(`[dev] ${bin} serve on http://127.0.0.1:${port}  (user opencode / password ${password})`)

@@ -1,6 +1,7 @@
 node_modules
 node_modules/
 dist/
+native/bot-host/target/
 .DS_Store
 *.log
 .bot-tmp/

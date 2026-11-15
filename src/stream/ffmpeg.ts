@@ -16,9 +16,8 @@ export interface FfmpegEncoderParams {
 
 /**
  * Captures the screen with ffmpeg and emits raw H.264 Annex-B on stdout:
- * one process, one pipe, no timestamps. The Go sidecar reframes the NAL
- * stream into samples; `-f h264` output is exactly the Annex-B byte stream
- * the bot-capture contract also produces, minus the length/pts header.
+ * one process, one pipe, no timestamps. `bot-host` splits the NAL
+ * stream into access units and synthesizes timestamps from `fps`.
  */
 export function buildFfmpegArgs(params: FfmpegEncoderParams): string[] {
   const { fps, bitrate, maxDimension: max } = params
@@ -79,7 +78,7 @@ export interface BackendProbe {
   readonly reason?: string
 }
 
-/** Picks the live-stream backend: native bot-capture (framed contract) or a raw ffmpeg pipe. */
+/** Picks the live-stream backend: native bot-host (built-in capture + encode) or a raw ffmpeg pipe. */
 export function pickStreamBackend(
   input: BackendProbeInput,
   locale: SupportedLocale = resolveLocale(),

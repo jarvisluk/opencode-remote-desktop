@@ -2,6 +2,7 @@ import { join } from "node:path"
 import { Plugin, Skill } from "@opencode/plugin"
 import { resolveOptions } from "./options.ts"
 import { BotRpc } from "./rpc.ts"
+import { hostClient } from "./host/client.ts"
 import { KeepAwakeController } from "./macos/awake.ts"
 import {
   captureScreenJpeg,
@@ -101,7 +102,7 @@ export default Plugin.define({
     const locale = resolveLocale(options.locale)
 
     const shared = acquireShared(() => {
-      const awake = new KeepAwakeController(isMac ? options.keepAwake : "off")
+      const awake = new KeepAwakeController(hostClient.available() || isMac ? options.keepAwake : "off")
       const takeovers = new TakeoverManager(() => awake.acquire())
       const secrets = new SecretManager(() => awake.acquire())
       const browser = new MacBrowserController(options.reuseHostBrowser)

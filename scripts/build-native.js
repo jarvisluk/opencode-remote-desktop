@@ -1,29 +1,40 @@
-// Builds the native live-stream helpers into dist/bin for the current platform.
-//   bot-stream-<platform>-<arch>   Go + pion/webrtc (cross-platform)
-//   bot-capture-<platform>-<arch>  platform capture/encode/input backend (macOS: Swift)
+// Builds the unified Rust host binary into dist/bin for the current platform:
+//   bot-host-<platform>-<arch>[.exe]
 import { execFileSync } from "node:child_process"
-import { mkdirSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const out = path.join(root, "dist/bin")
+const crateDir = path.join(root, "native/bot-host")
+const outDir = path.join(root, "dist/bin")
 const { platform, arch } = process
 const ext = platform === "win32" ? ".exe" : ""
-mkdirSync(out, { recursive: true })
+mkdirSync(outDir, { recursive: true })
 
-const run = (cmd, args, cwd, env) => {
-  console.log(`$ ${cmd} ${args.join(" ")}`)
-  execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...env } })
+const targetTriple = process.env.CARGO_BUILD_TARGET?.trim()
+const args = ["build", "--release"]
+if (targetTriple) {
+  args.push("--target", targetTriple)
 }
 
-run("go", ["build", "-trimpath", "-ldflags=-s -w", "-o", path.join(out, `bot-stream-${platform}-${arch}${ext}`), "."],
-  path.join(root, "native/stream"), { CGO_ENABLED: "0" })
+console.log(`$ cargo ${args.join(" ")}`)
+execFileSync("cargo", args, { cwd: crateDir, stdio: "inherit" })
 
-if (platform === "darwin") {
-  const target = arch === "arm64" ? "arm64-apple-macos13" : "x86_64-apple-macos13"
-  run("swiftc", ["-O", "-target", target, "main.swift", "-o", path.join(out, `bot-capture-${platform}-${arch}`)],
-    path.join(root, "native/capture-macos"))
-} else {
-  console.warn(`No capture backend for ${platform} yet; the panel will fall back to JPEG polling.`)
+const targetDir = targetTriple
+  ? path.join(crateDir, "target", targetTriple, "release")
+  : path.join(crateDir, "target", "release")
+const built = path.join(targetDir, `bot-host${ext}`)
+if (!existsSync(built)) {
+  throw new Error(`Expected release binary not found at ${built}`)
 }
+
+const dest = path.join(outDir, `bot-host-${platform}-${arch}${ext}`)
+const tmpDest = `${dest}.tmp-${process.pid}`
+copyFileSync(built, tmpDest)
+if (platform !== "win32") {
+  chmodSync(tmpDest, 0o755)
+}
+rmSync(dest, { force: true })
+renameSync(tmpDest, dest)
+console.log(`Built ${path.relative(root, dest)}`)

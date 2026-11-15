@@ -1,38 +1,15 @@
-# Native live-stream helpers
+# Native Host (`bot-host`)
 
-Built into `dist/bin` by `npm run build:native` (needs Go; on macOS also Swift).
+`native/bot-host` is a single Rust binary that replaces the previous Go WebRTC sidecar (`bot-stream`), Swift capture helper (`bot-capture`), and platform shell wrappers (`security`, `screencapture`, `sips`, `caffeinate`, `pbcopy`).
 
-| Binary | Language | Role |
-|---|---|---|
-| `bot-stream-<platform>-<arch>` | Go + pion/webrtc | WebRTC peer, one shared H.264 track for all viewers, input DataChannel. Platform-independent. |
-| `bot-capture-<platform>-<arch>` | per platform | Screen capture + hardware H.264 encode + input injection. |
+Built locally into `dist/bin/bot-host-<platform>-<arch>[.exe]` via `npm run build:native`, or distributed as per-platform npm `optionalDependencies` (`@opencode-bot/host-<platform>-<arch>`).
 
-The plugin talks to `bot-stream` over stdin/stdout JSON lines (`offer` → `answer`, `close`);
-signaling travels over the plugin RPC (`streamOffer` / `streamClose`), so it works wherever the
-OpenCode server is reachable. Media goes peer-to-peer.
+## Architecture
 
-## Capture backends
-
-`bot-stream --capture <binary>` runs the framed contract below (native backend,
-macOS: hardware encode + input injection). `bot-stream --raw-cmd '<JSON argv>'`
-runs any command that writes raw H.264 Annex-B to stdout (raw backend, e.g.
-`ffmpeg -f h264 ... pipe:1`); the sidecar re-frames the NAL stream itself and
-synthesizes timestamps from `--fps`. The raw backend is **view-only**: there is
-no stdin contract, so DataChannel input events are dropped (input injection
-still works through the agent-desktop RPC fallback).
-
-Adding Windows/Linux the quick way: install ffmpeg and rely on the raw backend
-(`streamBackend: "ffmpeg"` or auto). The full way: write another `bot-capture`
-that honours this contract:
-
-- args: `--fps N --bitrate BPS --max-dim PX --display I`
-- stdout: `[u32 BE length][u64 BE pts µs][u8 flags, 1 = keyframe][H.264 Annex-B, constrained baseline, SPS/PPS before keyframes]`
-- stdin JSON lines: `{"t":"key"}`, `{"t":"bitrate","v":bps}`, and input
-  `{"t":"move"|"down"|"up","x":0..1,"y":0..1,"b":0|1|2,shift,ctrl,alt,meta}`,
-  `{"t":"wheel","dx","dy"}` (pixels), `{"t":"keydown"|"keyup","code":KeyboardEvent.code,...mods}`, `{"t":"text","s":"..."}`
-- stderr JSON lines: `{"t":"ready","width","height"}` / `{"t":"error","message"}`
-- exit when stdin closes
-
-Planned native backends (beyond the ffmpeg raw backend): Windows
-(Desktop Duplication + Media Foundation H.264 + SendInput),
-Linux (PipeWire portal + VA-API/x264 + uinput/libei).
+- **Protocol**: persistent stdio JSON-RPC (`bot-host --stdio`) plus CLI flags (`--version`, `--status`, `--list-displays`, `--list-windows`).
+- **WebRTC (`str0m`)**: pure Rust ICE/DTLS/SRTP/SCTP peer connection, single H.264 video track (`profile-level-id=42e01f`), `"input"` DataChannel, RTCP PLI/FIR keyframe requests, non-trickle ICE (UDP4/UDP6 + RFC 4571 ICE-TCP passive + STUN), and virtual-NIC / fake-IP filtering.
+- **Platform Backends**:
+  - **macOS (`platform/macos.rs`)**: `ScreenCaptureKit` (`SCShareableContent`, `SCScreenshotManager`, `SCStream`) + `VideoToolbox` H.264 Constrained Baseline low-latency hardware encode + `CGEvent` mouse/pixel-wheel/key/UTF-16 injection + `IOPMAssertionCreateWithName` keep-awake + `Security.framework` / `keyring` Keychain (`opencode-bot` double-hex compatible).
+  - **Windows (`platform/windows.rs`)**: `EnumDisplayMonitors` + `EnumWindows` + GDI `BitBlt` capture + `OpenH264` Constrained Baseline encoding + `SendInput` (`MOUSEEVENTF_VIRTUALDESK`, `KEYEVENTF_UNICODE`) + `SetThreadExecutionState` keep-awake + Windows Credential Manager (`keyring`).
+  - **Linux (`platform/linux.rs`)**: `x11rb` (`RANDR` displays, `_NET_CLIENT_LIST` windows, `GetImage` capture, `XTEST` input + `xdotool` text fallback) + `OpenH264` encoding + D-Bus `org.freedesktop.ScreenSaver.Inhibit` keep-awake + Secret Service (`keyring`).
+- **FFmpeg Pipe Mode**: if `stream.offer` receives `ffmpegCmd`, `bot-host` spawns that command, splits its raw Annex-B stdout via `AnnexBStreamSplitter`, and streams it through the same `str0m` WebRTC stack.

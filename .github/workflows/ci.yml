@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "refactor/*"]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+          - os: windows-latest
+          - os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build tools (openh264 source build)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - run: npm ci --omit=optional
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - name: Cargo test & build bot-host
+        run: cargo test --manifest-path native/bot-host/Cargo.toml && npm run build:native

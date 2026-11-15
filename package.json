@@ -1,14 +1,16 @@
 {
   "name": "opencode-remote-desktop",
   "version": "0.1.0",
-  "description": "A macOS host for OpenCode: real desktop and signed-in browser control, live human takeover from any browser, and 24/7 routines.",
+  "description": "Remote desktop & browser control host for OpenCode across macOS, Windows, and Linux: native WebRTC H.264 streaming, live human takeover, and 24/7 routines.",
   "keywords": [
     "opencode",
     "opencode-plugin",
     "macos",
+    "windows",
+    "linux",
     "computer-use",
     "desktop-automation",
-    "accessibility",
+    "webrtc",
     "human-takeover",
     "automation"
   ],
@@ -24,13 +26,17 @@
   },
   "files": [
     "src",
-    "dist",
-    "!dist/**/*.map",
-    "native"
+    "dist/gui-experimental.cjs",
+    "native/README.md",
+    "native/bot-host/Cargo.toml",
+    "native/bot-host/Cargo.lock",
+    "native/bot-host/build.rs",
+    "native/bot-host/src"
   ],
   "scripts": {
     "build": "node scripts/build-gui.js",
     "build:native": "node scripts/build-native.js",
+    "prepare:host-packages": "node scripts/prepare-host-packages.mjs",
     "dev": "node scripts/dev.js",
     "install:macbook": "sh scripts/install-macbook.sh",
     "harness": "node test/stream-harness.mjs",
@@ -38,6 +44,14 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "build:pages": "node scripts/build-pages.js",
     "prepack": "npm run build"
+  },
+  "optionalDependencies": {
+    "@opencode-bot/host-darwin-arm64": "0.1.0",
+    "@opencode-bot/host-darwin-x64": "0.1.0",
+    "@opencode-bot/host-win32-x64": "0.1.0",
+    "@opencode-bot/host-win32-arm64": "0.1.0",
+    "@opencode-bot/host-linux-x64": "0.1.0",
+    "@opencode-bot/host-linux-arm64": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
