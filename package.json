@@ -1,6 +1,6 @@
 {
   "name": "opencode-remote-desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Remote desktop & browser control host for OpenCode across macOS, Windows, and Linux: native WebRTC H.264 streaming, live human takeover, and 24/7 routines.",
   "keywords": [
     "opencode",

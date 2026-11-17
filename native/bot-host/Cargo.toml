@@ -1,6 +1,6 @@
 [package]
 name = "bot-host"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.89"
 description = "Cross-platform native WebRTC, screen capture, input injection, power, and keychain host daemon for opencode-remote-desktop"
