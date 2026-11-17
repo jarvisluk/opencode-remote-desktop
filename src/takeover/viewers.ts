@@ -38,6 +38,16 @@ export class ViewerRegistry {
     return w.length === 0 || (!w.some((b) => b.panel) && w.some((b) => b.platform !== "desktop"))
   }
 
+  /**
+   * True when the only fresh controller on this session is the desktop app running on the host itself — the local
+   * server, where Live Screen is intentionally hidden. There is no panel and no remote person who could take over
+   * or type a secret, so takeover and secret prompts must not block the session (they have no input endpoint).
+   */
+  isLocalHost(sessionID: string, now = Date.now()): boolean {
+    const w = this.watching(sessionID, now)
+    return w.length > 0 && w.every((b) => b.platform === "desktop" && !b.panel)
+  }
+
   /** One line for the model describing who is controlling this session. */
   describe(sessionID: string, now = Date.now()): string {
     const w = this.watching(sessionID, now)

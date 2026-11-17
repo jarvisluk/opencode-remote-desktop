@@ -282,7 +282,7 @@ export function registerBotTools(
   editor.add({
     name: "request_takeover",
     description:
-      "Hand over the remote macOS screen to the human user for account sign-in, 2FA, QR login, Passkey, CAPTCHA, or payment confirmation. Automatically opens the built-in Live Screen panel with a resume button and yields the current turn; the session resumes automatically when the user clicks resume or replies in chat.",
+      "Hand over the remote macOS screen to the human user for account sign-in, 2FA, QR login, Passkey, CAPTCHA, or payment confirmation. Automatically opens the built-in Live Screen panel with a resume button and yields the current turn; the session resumes automatically when the user clicks resume or replies in chat. Disabled when the session runs in the Desktop app on the host itself (no remote panel).",
     options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
@@ -301,6 +301,14 @@ export function registerBotTools(
     },
     execute: async (rawInput: any, toolCtx: ToolContext) => {
       const input = rawInput as { reason: string; app?: string }
+      if (viewers?.isLocalHost(toolCtx.sessionID)) {
+        return {
+          content: [
+            `Human takeover is disabled on the local host: this session runs in the OpenCode Desktop app on this Mac, so there is no Live Screen panel or remote controller to take over.`,
+            `Do not call this tool again. Continue the task with computer_desktop / computer_browser, or tell the user what to do on this Mac.`,
+          ].join(" "),
+        }
+      }
       if (isMac && input.app) {
         await runAgentDesktop(["focus-window", "--app", input.app], {
           headed: true,
@@ -335,7 +343,7 @@ export function registerBotTools(
   editor.add({
     name: "secret_request",
     description:
-      "Ask the user to type a password or other secret into a card in Live Screen (or the Web Console). Blocks until they submit or cancel. The value goes straight into the macOS Keychain and is never returned to you; type it with computer_secret_type. Only call this when a login actually needs a secret you do not have.",
+      "Ask the user to type a password or other secret into a card in Live Screen (or the Web Console). Blocks until they submit or cancel. The value goes straight into the macOS Keychain and is never returned to you; type it with computer_secret_type. Only call this when a login actually needs a secret you do not have. Disabled when the session runs in the Desktop app on the host itself (no remote panel).",
     options: { namespace: "computer", codemode: true, pinned: false },
     input: {
       type: "object",
@@ -357,6 +365,14 @@ export function registerBotTools(
       const input = rawInput as { name: string; reason: string }
       if (!isValidSecretName(input.name)) {
         return { content: "Error: `name` must match [A-Za-z0-9._-]{1,64}." }
+      }
+      if (viewers?.isLocalHost(toolCtx.sessionID)) {
+        return {
+          content: [
+            `computer_secret_request is disabled on the local host: there is no Live Screen panel or remote controller to enter "${input.name}".`,
+            `Do not retry. Tell the user local mode has no secret-entry UI; use an already-stored secret with computer_secret_type, or let the user handle this login directly on this Mac.`,
+          ].join(" "),
+        }
       }
       try {
         const { promise } = secrets.request({

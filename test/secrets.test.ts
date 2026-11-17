@@ -78,7 +78,7 @@ test("SecretManager rejects on cancel, abort, timeout and supersede", async () =
   assert.throws(() => manager.request({ sessionID: "ses_3", name: "bad name", reason: "r" }), /Invalid secret name/)
 })
 
-function setup(overrides: { readSecret?: (name: string) => Promise<string | null>; runDesktop?: any } = {}) {
+function setup(overrides: { readSecret?: (name: string) => Promise<string | null>; runDesktop?: any; viewers?: any } = {}) {
   const registered = new Map<string, any>()
   const editor = { namespace() {}, add: (def: any) => registered.set(def.name, def) } as any
   const permissions: any[] = []
@@ -115,6 +115,16 @@ test("computer_secret_request waits for the user and never returns the value", a
   assert.match((await cancelled).content, /ended without a value/)
 
   assert.match((await registered.get("secret_request").execute({ name: "a b", reason: "x" }, toolCtx)).content, /must match/)
+})
+
+test("computer_secret_request is disabled on the local host without blocking", async () => {
+  const { ViewerRegistry } = await import("../src/takeover/viewers.ts")
+  const viewers = new ViewerRegistry()
+  viewers.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "ses_1", panel: false })
+  const { registered, secrets, toolCtx } = setup({ viewers })
+  const out = await registered.get("secret_request").execute({ name: "gh", reason: "GitHub" }, toolCtx)
+  assert.match(out.content, /disabled on the local host/)
+  assert.equal(secrets.list().length, 0, "no pending secret request is registered")
 })
 
 test("computer_secret_type keeps the value out of permissions and results", async () => {

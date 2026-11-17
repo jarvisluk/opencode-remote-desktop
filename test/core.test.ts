@@ -221,6 +221,30 @@ test("computer_request_takeover yields turn immediately and blocks desktop/brows
   manager.dispose()
 })
 
+test("computer_request_takeover is disabled on the local host without suspending the session", async () => {
+  const { ViewerRegistry } = await import("../src/takeover/viewers.ts")
+  const registered = new Map<string, any>()
+  const editor = { namespace() {}, add: (def: any) => registered.set(def.name, def) } as any
+  const manager = new TakeoverManager(() => () => {})
+  const viewers = new ViewerRegistry()
+  viewers.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "ses_1", panel: false })
+  registerBotTools(editor, {
+    options: resolveOptions({}),
+    isMac: true,
+    awake: { isHeld: () => false } as any,
+    takeovers: manager,
+    secrets: new SecretManager(() => () => {}),
+    viewers,
+    browser: {} as any,
+    routines: {} as any,
+    permissionAssert: async () => {},
+  })
+  const toolCtx = { sessionID: "ses_1", messageID: "msg_1", agent: "build", id: "call_1", signal: new AbortController().signal } as any
+  const out = await registered.get("request_takeover").execute({ reason: "登录" }, toolCtx)
+  assert.match(out.content, /disabled on the local host/)
+  assert.equal(manager.size, 0, "no takeover is registered")
+})
+
 test("console link carries server and session but no credentials; viewer registry tracks panels", async () => {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
@@ -253,6 +277,16 @@ test("console link carries server and session but no credentials; viewer registr
   v.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
   assert.equal(v.needsLink("s1"), false, "the desktop app on the host itself needs no link")
   assert.equal(v.hasPanelViewer("s1", Date.now() + 60_000), false)
+
+  const local = new ViewerRegistry()
+  assert.equal(local.isLocalHost("s1"), false, "no viewers yet")
+  local.beat({ clientId: "d", platform: "desktop", mobile: false, sessionID: "s1", panel: false })
+  assert.equal(local.isLocalHost("s1"), true, "only the host desktop app is watching")
+  assert.equal(local.isLocalHost("s1", Date.now() + 60_000), false, "stale heartbeats do not count")
+  local.beat({ clientId: "w", platform: "web", mobile: false, sessionID: "s1", panel: false })
+  assert.equal(local.isLocalHost("s1"), false, "a remote web viewer has a console input endpoint")
+  local.beat({ clientId: "r", platform: "desktop", mobile: false, sessionID: "s1", panel: true })
+  assert.equal(local.isLocalHost("s1"), false, "a remote panel is an input endpoint")
 
   // A desktop app watching another session must not hide this one from a web user.
   const w = new ViewerRegistry()
