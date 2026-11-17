@@ -105,7 +105,7 @@ test("macos exec environment and binary resolution", async () => {
   assert.ok(macPath.includes("/usr/bin"))
   assert.ok(macPath.includes("/opt/homebrew/bin"))
 
-  const shellBin = resolveBinary(process.platform === "win32" ? "cmd" : "sh")
+  const shellBin = resolveBinary(process.platform === "win32" ? "cmd.exe" : "sh")
   assert.ok(shellBin !== null)
 
   const status = await getMacDesktopStatus()
